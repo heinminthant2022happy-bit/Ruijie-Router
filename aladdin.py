@@ -6,7 +6,7 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # --- CONFIGURATION ---
 # သင်၏ GitHub keys.txt (Raw Link) ကို ဒီနေရာမှာ ထည့်ပါ
-GITHUB_RAW_URL = "https://raw.githubusercontent.com/YOUR_USER/YOUR_REPO/main/keys.txt"
+GITHUB_RAW_URL = "https://raw.githubusercontent.com/heinminthant2022happy-bit/Ruijie-Router/refs/heads/main/keys.txt"
 LOCAL_KEY_FILE = ".aladdin_token" # Auto Login အတွက် key သိမ်းမည့်ဖိုင်
 
 def get_hwid():
