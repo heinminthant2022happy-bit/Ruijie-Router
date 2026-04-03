@@ -1,4 +1,4 @@
-import base64, requests, re, urllib3, time, threading, os, random, subprocess, platform
+import base64, requests, re, urllib3, time, threading, os, random, subprocess, platform, uuid
 from datetime import datetime
 from urllib.parse import urlparse, parse_qs
 
@@ -11,17 +11,27 @@ LOCAL_KEY_FILE = ".aladdin_token"
 
 def get_id():
     try:
-        model = subprocess.getoutput("getprop ro.product.model").replace(" ", "")
-        ver = platform.release()
-        return f"ALADDIN-{model}-{ver}"
+        # MAC-based Unique ID (ဖုန်းတစ်လုံးစီအတွက် လုံးဝမတူတဲ့ ID)
+        node = uuid.getnode()
+        unique_id = hex(node)[2:].upper()
+        return f"ALADDIN-{unique_id}"
     except:
         return f"ALADDIN-USER-{os.getlogin()}"
 
 def banner():
     os.system('clear')
+    # Aladdin Big Text Logo ပြန်ထည့်ပေးထားပါတယ်
+    print("\033[96m")
+    print(r"""
+      _    _               _     _ _       
+     / \  | | __ _  __| | __| (_)_ __  
+    / _ \ | |/ _` |/ _` |/ _` | | '_ \ 
+   / ___ \| | (_| | (_| | (_| | | | | |
+  /_/   \_\_|\__,_|\__,_|\__,_|_|_| |_|
+    """)
     print("\033[93m" + "="*45)
-    print("\033[96m" + "     🚀 ALADDIN STARLINK BYPASS V15 🚀")
-    print("\033[95m" + "        MULTI-DEVICE LICENSE SYSTEM")
+    print("\033[92m" + "     🚀 ALADDIN STARLINK BYPASS V16 🚀")
+    print("\033[95m" + "        UNIQUE HARDWARE ID SYSTEM")
     print("\033[93m" + "="*45 + "\033[0m\n")
 
 def license_check():
@@ -53,7 +63,7 @@ def license_check():
                             with open(LOCAL_KEY_FILE, "w") as f: f.write(key)
                             found = True; break
             if not found:
-                print("\033[91m[X] Invalid Key or Device Unauthorized!\033[0m")
+                print("\033[91m[X] Invalid Key or Unauthorized ID!\033[0m")
                 if os.path.exists(LOCAL_KEY_FILE): os.remove(LOCAL_KEY_FILE)
                 exit()
         else: exit()
@@ -88,4 +98,4 @@ def start():
 if __name__ == "__main__":
     license_check()
     start()
-    
+                    
