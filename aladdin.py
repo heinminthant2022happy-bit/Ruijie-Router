@@ -2,6 +2,7 @@ import base64, requests, re, urllib3, time, threading, os, random, subprocess, p
 from datetime import datetime
 from urllib.parse import urlparse, parse_qs
 
+# SSL Warning တွေကို ပိတ်ထားမယ်
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # --- CONFIGURATION ---
@@ -11,11 +12,8 @@ LOCAL_KEY_FILE = ".aladdin_token"
 ID_STORAGE = ".aladdin_id"
 
 def get_id():
-    # ID ကို ဖိုင်ထဲမှာ အသေသိမ်းထားတဲ့ စနစ် (တစ်ခါထွက်ပြီးရင် ထပ်မပြောင်းတော့ပါ)
     if os.path.exists(ID_STORAGE):
         with open(ID_STORAGE, "r") as f: return f.read().strip()
-    
-    # ID အသစ် ထုတ်ပေးခြင်း
     new_id = f"ALADDIN-{uuid.uuid4().hex[:8].upper()}"
     with open(ID_STORAGE, "w") as f: f.write(new_id)
     return new_id
@@ -30,7 +28,8 @@ def banner():
   /_/   \_\_|\__,_|\__,_|\__,_|_|_| |_|
     """)
     print("\033[93m" + "="*45)
-    print("\033[92m" + "     🚀 ALADDIN STARLINK BYPASS V17 🚀")
+    print("\033[92m" + "     🚀 ALADDIN STARLINK BYPASS V18 🚀")
+    print("\033[95m" + "        SSL BYPASS & ID PROTECTED")
     print("\033[93m" + "="*45 + "\033[0m\n")
 
 def license_check():
@@ -41,7 +40,6 @@ def license_check():
 
     banner()
     print(f"\033[94m[DEVICE ID]: {my_id}\033[0m")
-    
     key = saved_key if saved_key else input("\033[93m[+] Enter Key: \033[0m").strip()
 
     try:
@@ -49,7 +47,9 @@ def license_check():
         token = base64.b64decode(T_ENC).decode()
         headers = {"Authorization": f"token {token}", "Accept": "application/vnd.github.v3.raw"}
         
-        resp = requests.get(url, headers=headers, timeout=15)
+        # Verify=False ထည့်ပြီး SSL စစ်တာကို ကျော်ခိုင်းလိုက်တယ်
+        resp = requests.get(url, headers=headers, timeout=15, verify=False)
+        
         if resp.status_code == 200:
             found = False
             for line in resp.text.splitlines():
@@ -67,9 +67,10 @@ def license_check():
                 if os.path.exists(LOCAL_KEY_FILE): os.remove(LOCAL_KEY_FILE)
                 time.sleep(2); exit()
         else:
-            print("\033[91m[!] Server Error. Check Token/Network.\033[0m"); time.sleep(2); exit()
+            print("\033[91m[!] Server Response Error!\033[0m"); time.sleep(2); exit()
     except Exception as e:
-        print(f"\033[91m[!] Error: {str(e)}\033[0m"); time.sleep(2); exit()
+        print(f"\033[91m[!] Network/SSL Error: Bypass Attempted...\033[0m")
+        time.sleep(2); exit()
 
 def turbo(l):
     h = {"User-Agent": "Mozilla/5.0"}
@@ -84,8 +85,8 @@ def start():
     print("\033[94m[*] Bypass Engine Started...\033[0m")
     while True:
         try:
-            if requests.get("http://www.google.com/generate_204", timeout=3).status_code != 204:
-                r = requests.get("http://connectivitycheck.gstatic.com/generate_204", allow_redirects=True)
+            if requests.get("http://www.google.com/generate_204", timeout=3, verify=False).status_code != 204:
+                r = requests.get("http://connectivitycheck.gstatic.com/generate_204", allow_redirects=True, verify=False)
                 q = parse_qs(urlparse(r.url).query)
                 sid = q.get('sessionId', [None])[0]
                 if sid:
