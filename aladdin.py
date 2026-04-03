@@ -5,7 +5,6 @@ from urllib.parse import urlparse, parse_qs
 # SSL Warning တွေကို ပိတ်ထားမယ်
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-# --- CONFIGURATION ---
 U_ENC = 'aHR0cHM6Ly9yYXcuZ2l0aHVidXNlcmNvbnRlbnQuY29tL2hlaW5taW50aGFudDIwMjJoYXBweS1iaXQva2V5LnR4dC9yZWZzL2hlYWRzL21haW4va2V5cy50eHQ='
 T_ENC = 'Z2hwXzEyelJGamxndVVlZXEyaEtmWkMwUlhINzN5Y2RGbTBLeldHdw=='
 LOCAL_KEY_FILE = ".aladdin_token"
@@ -29,7 +28,6 @@ def banner():
     """)
     print("\033[93m" + "="*45)
     print("\033[92m" + "     🚀 ALADDIN STARLINK BYPASS V18 🚀")
-    print("\033[95m" + "        SSL BYPASS & ID PROTECTED")
     print("\033[93m" + "="*45 + "\033[0m\n")
 
 def license_check():
@@ -47,9 +45,8 @@ def license_check():
         token = base64.b64decode(T_ENC).decode()
         headers = {"Authorization": f"token {token}", "Accept": "application/vnd.github.v3.raw"}
         
-        # Verify=False ထည့်ပြီး SSL စစ်တာကို ကျော်ခိုင်းလိုက်တယ်
+        # verify=False ထည့်ထားတဲ့အတွက် SSL Error မတက်တော့ပါဘူး
         resp = requests.get(url, headers=headers, timeout=15, verify=False)
-        
         if resp.status_code == 200:
             found = False
             for line in resp.text.splitlines():
@@ -61,16 +58,12 @@ def license_check():
                             print(f"\033[92m[✓] Access Granted until: {p[2]}\033[0m")
                             with open(LOCAL_KEY_FILE, "w") as f: f.write(key)
                             found = True; break
-            
             if not found:
                 print("\033[91m[X] Invalid Key or Unauthorized ID!\033[0m")
                 if os.path.exists(LOCAL_KEY_FILE): os.remove(LOCAL_KEY_FILE)
                 time.sleep(2); exit()
-        else:
-            print("\033[91m[!] Server Response Error!\033[0m"); time.sleep(2); exit()
-    except Exception as e:
-        print(f"\033[91m[!] Network/SSL Error: Bypass Attempted...\033[0m")
-        time.sleep(2); exit()
+        else: exit()
+    except: exit()
 
 def turbo(l):
     h = {"User-Agent": "Mozilla/5.0"}
@@ -101,4 +94,4 @@ def start():
 if __name__ == "__main__":
     license_check()
     start()
-
+    
