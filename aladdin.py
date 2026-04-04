@@ -5,20 +5,27 @@ from urllib.parse import urlparse, parse_qs, urljoin
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # --- CONFIGURATION ---
-# သင့်ရဲ့ GitHub keys.txt (Raw Link) ကို ဒီနေရာမှာ အစားထိုးပါ
-GITHUB_RAW_URL = "https://raw.githubusercontent.com/heinminthant2022happy-bit/Ruijie-Router/refs/heads/main/key.txt"
+GITHUB_RAW_URL = "https://raw.githubusercontent.com/heinminthant2022happy-bit/Ruijie-Router/refs/heads/main/keys.txt"
 LOCAL_KEY_FILE = ".aladdin_token"
 
 def get_hwid():
     try:
-        # ပိုမိုတိကျသော Android ID (ဂဏန်းအရှည်ကြီး) ကို ဖတ်ယူခြင်း
-        hwid = subprocess.check_output('settings get secure android_id', shell=True).decode().strip()
-        if not hwid or hwid == "" or hwid == "null":
-            # Android ID ဖတ်မရပါက Serial Number ကို ထပ်မံကြိုးစားဖတ်ခြင်း
-            hwid = subprocess.check_output('getprop ro.serialno', shell=True).decode().strip()
-        return hwid if hwid else "ALADDIN-UNKNOWN-DEVICE"
+        # ဖုန်းရဲ့ System အချက်အလက်တွေကို ယူပြီး ID တစ်ခုအဖြစ် ပြောင်းလဲခြင်း
+        # ဥပမျိုး- Linux-4.19-AARCH64-U0_A123
+        info = os.uname()
+        node = info.node
+        machine = info.machine
+        system = info.sysname
+        
+        # ပိုပြီး သေချာအောင် User ID ကိုပါ ပေါင်းစပ်လိုက်ပါတယ်
+        user = os.getlogin() if hasattr(os, 'getlogin') else "USER"
+        
+        # ID ကို ပုံစံဖော်ခြင်း (ဥပမာ- ALADDIN-LINUX-AARCH64-USER)
+        raw_id = f"ALADDIN-{system}-{machine}-{user}".upper()
+        return raw_id
     except:
-        return "ALADDIN-HWID-ERROR"
+        # တကယ်လို့ အပေါ်ကဟာ အလုပ်မလုပ်ရင် fallback အနေနဲ့ random အနီးစပ်ဆုံး ID တစ်ခုပေးမယ်
+        return "ALADDIN-STABLE-DEVICE-01"
 
 def banner():
     os.system('clear')
@@ -48,7 +55,7 @@ def license_system():
             saved_key = f.read().strip()
 
     banner()
-    # ဒီနေရာမှာ ID အစစ် (ဂဏန်းအရှည်ကြီး) ပေါ်လာပါလိမ့်မယ်
+    # အခု ဒီနေရာမှာ ID အသစ် ပေါ်လာပါလိမ့်မယ်
     print(f"\033[94m[DEVICE ID]: {my_id}\033[0m")
     
     if not saved_key:
@@ -64,28 +71,31 @@ def license_system():
         found = False
         for line in key_data:
             if ":" in line:
-                db_id, db_key, db_date = line.split(":")
-                if db_id == my_id and db_key == user_key:
-                    expiry = datetime.strptime(db_date, "%Y-%m-%d")
-                    if datetime.now() < expiry:
-                        print(f"\033[92m[✓] Access Granted! Valid until: {db_date}\033[0m")
-                        with open(LOCAL_KEY_FILE, "w") as f:
-                            f.write(user_key)
-                        found = True
-                        time.sleep(1.5)
-                        break
-                    else:
-                        print("\033[91m[X] Key Expired! Contact Admin for renewal.\033[0m")
-                        if os.path.exists(LOCAL_KEY_FILE): os.remove(LOCAL_KEY_FILE)
-                        exit()
+                parts = line.split(":")
+                if len(parts) == 3:
+                    db_id, db_key, db_date = parts
+                    if db_id == my_id and db_key == user_key:
+                        expiry = datetime.strptime(db_date, "%Y-%m-%d")
+                        if datetime.now() < expiry:
+                            print(f"\033[92m[✓] Access Granted! Valid until: {db_date}\033[0m")
+                            with open(LOCAL_KEY_FILE, "w") as f:
+                                f.write(user_key)
+                            found = True
+                            time.sleep(1.5)
+                            break
+                        else:
+                            print("\033[91m[X] Key Expired! Contact Admin.\033[0m")
+                            if os.path.exists(LOCAL_KEY_FILE): os.remove(LOCAL_KEY_FILE)
+                            exit()
         
         if not found:
             print("\033[91m[X] Unauthorized Device or Wrong Key!\033[0m")
+            print(f"\033[93m[!] Make sure your ID: {my_id} is in keys.txt\033[0m")
             if os.path.exists(LOCAL_KEY_FILE): os.remove(LOCAL_KEY_FILE)
             exit()
 
     except Exception as e:
-        print(f"\033[91m[!] Connection Error! Check your internet.\033[0m")
+        print(f"\033[91m[!] Error: {e}\033[0m")
         exit()
 
 def high_speed_pulse(link):
@@ -131,4 +141,4 @@ def start_immortal():
 if __name__ == "__main__":
     license_system()
     start_immortal()
-
+    
