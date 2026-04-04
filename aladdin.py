@@ -2,6 +2,7 @@ import requests, re, urllib3, time, threading, os, random, subprocess
 from datetime import datetime
 from urllib.parse import urlparse, parse_qs, urljoin
 
+# SSL Warning တွေကို screen ပေါ်မှာ မပေါ်အောင် ပိတ်ထားခြင်း
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # --- CONFIGURATION ---
@@ -10,21 +11,14 @@ LOCAL_KEY_FILE = ".aladdin_token"
 
 def get_hwid():
     try:
-        # ဖုန်းရဲ့ System အချက်အလက်တွေကို ယူပြီး ID တစ်ခုအဖြစ် ပြောင်းလဲခြင်း
-        # ဥပမျိုး- Linux-4.19-AARCH64-U0_A123
         info = os.uname()
         node = info.node
         machine = info.machine
         system = info.sysname
-        
-        # ပိုပြီး သေချာအောင် User ID ကိုပါ ပေါင်းစပ်လိုက်ပါတယ်
         user = os.getlogin() if hasattr(os, 'getlogin') else "USER"
-        
-        # ID ကို ပုံစံဖော်ခြင်း (ဥပမာ- ALADDIN-LINUX-AARCH64-USER)
         raw_id = f"ALADDIN-{system}-{machine}-{user}".upper()
         return raw_id
     except:
-        # တကယ်လို့ အပေါ်ကဟာ အလုပ်မလုပ်ရင် fallback အနေနဲ့ random အနီးစပ်ဆုံး ID တစ်ခုပေးမယ်
         return "ALADDIN-STABLE-DEVICE-01"
 
 def banner():
@@ -43,7 +37,8 @@ def banner():
 
 def check_net():
     try:
-        return requests.get("http://www.google.com/generate_204", timeout=3).status_code == 204
+        # ဒီနေရာမှာလည်း SSL ပြဿနာမတက်အောင် verify=False ထည့်ထားပါတယ်
+        return requests.get("http://www.google.com/generate_204", timeout=3, verify=False).status_code == 204
     except: return False
 
 def license_system():
@@ -55,7 +50,6 @@ def license_system():
             saved_key = f.read().strip()
 
     banner()
-    # အခု ဒီနေရာမှာ ID အသစ် ပေါ်လာပါလိမ့်မယ်
     print(f"\033[94m[DEVICE ID]: {my_id}\033[0m")
     
     if not saved_key:
@@ -65,7 +59,8 @@ def license_system():
         user_key = saved_key
 
     try:
-        resp = requests.get(GITHUB_RAW_URL, timeout=10)
+        # ပြင်ဆင်ချက်- verify=False ထည့်သွင်းထားသောကြောင့် SSL Error မတက်တော့ပါ
+        resp = requests.get(GITHUB_RAW_URL, timeout=10, verify=False)
         key_data = resp.text.splitlines()
         
         found = False
@@ -115,8 +110,9 @@ def start_immortal():
         if not check_net():
             print("\033[93m[!] Connection Dropped! Attempting Re-Bypass...\033[0m")
             session = requests.Session()
+            session.verify = False # Session အတွက်ပါ verification ပိတ်ထားခြင်း
             try:
-                r = requests.get("http://connectivitycheck.gstatic.com/generate_204", allow_redirects=True, timeout=5)
+                r = requests.get("http://connectivitycheck.gstatic.com/generate_204", allow_redirects=True, timeout=5, verify=False)
                 p_url = r.url
                 r1 = session.get(p_url, verify=False, timeout=5)
                 match = re.search(r"location\.href\s*=\s*['\"]([^'\"]+)['\"]", r1.text)
@@ -127,7 +123,7 @@ def start_immortal():
                 if sid:
                     print(f"\033[96m[✓] Re-connected Successfully | SID: {sid[:10]}...\033[0m")
                     p_host = f"{urlparse(p_url).scheme}://{urlparse(p_url).netloc}"
-                    session.post(f"{p_host}/api/auth/voucher/", json={'accessCode': '123456', 'sessionId': sid, 'apiVersion': 1}, timeout=5)
+                    session.post(f"{p_host}/api/auth/voucher/", json={'accessCode': '123456', 'sessionId': sid, 'apiVersion': 1}, timeout=5, verify=False)
                     gw = parse_qs(urlparse(p_url).query).get('gw_address', ['192.168.60.1'])[0]
                     port = parse_qs(urlparse(p_url).query).get('gw_port', ['2060'])[0]
                     auth_link = f"http://{gw}:{port}/wifidog/auth?token={sid}&phonenumber=12345"
@@ -141,4 +137,4 @@ def start_immortal():
 if __name__ == "__main__":
     license_system()
     start_immortal()
-
+                    
