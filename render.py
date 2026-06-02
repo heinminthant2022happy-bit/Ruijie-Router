@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Ruijie Wi-Fi Voucher Telegram Bot - Render Secure Env Version V14 (Stable Fixed)
+Ruijie Wi-Fi Voucher Telegram Bot - Render Secure Env Version V14.1 (Stable Fixed)
 """
 
 import os
@@ -97,12 +97,10 @@ async def get_session_id(http_session, session_url, previous_session_id):
     if not session_url:
         return previous_session_id
         
-    # URL ထဲမှာ sessionId= တိုက်ရိုက်ပါလာရင် ဖြတ်ယူမယ်
     url_match = re.search(r"[?&]sessionId=([a-zA-Z0-9\.\-_]+)", session_url)
     if url_match:
         return url_match.group(1).strip()
         
-    # Ruijie Cloud Link ဖြစ်နေရင် Session ID သီးသန့် မလိုတဲ့အတွက် အလုပ်ဆက်လုပ်ခွင့်ပေးမယ်
     if "ruijienetworks.com" in session_url:
         return "cloud_session_active"
 
@@ -145,7 +143,6 @@ def generate_random_voucher(mode, length, history_set, in_running):
 
 # ==================== LOGIN WORKER ====================
 async def login_voucher_async(http_session, session_id, voucher, base_url, portal_url):
-    # Ruijie Cloud link စနစ်အတွက် stage=login ပြောင်းပြီး parameter မပျောက်အောင် တွဲပို့ပေးခြင်း
     if "ruijienetworks.com" in base_url:
         if "wifidog" in portal_url:
             login_url = portal_url.replace("stage=portal", "stage=login")
@@ -168,7 +165,6 @@ async def login_voucher_async(http_session, session_id, voucher, base_url, porta
         except:
             return voucher, False, ""
             
-    # Local Router IP စနစ်အတွက် API Post ပို့ခြင်း
     else:
         if not session_id:
             return voucher, False, ""
@@ -414,7 +410,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         us = get_user_session(user_id)
         us.portal_url = text.strip()
         
-        # Domain or IP Extraction
         host_match = re.search(r'(https?://[^/]+)', us.portal_url)
         if host_match:
             base_domain = host_match.group(1)
@@ -495,4 +490,78 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_states[user_id] = "waiting_approve"
         await update.message.reply_text("💡 **User အသစ် ထပ်တိုးရန် ပုံစံအတိုင်း ပို့ပေးပါ -**\n`TelegramID|ရက်သက်တမ်း|နေ့စဉ်Limit`", reply_markup=admin_menu())
 
-async def handle_photo(update: Update, context: ContextTy
+async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    if user_states.get(user_id) == "waiting_receipt":
+        user_states.pop(user_id, None)
+        await update.message.reply_text("✅ **ပြေစာကို Admin ထံသို့ ပေးပို့လိုက်ပါပြီ။**")
+
+async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    data = query.data
+    user_id = query.from_user.id
+    chat_id = query.message.chat_id
+
+    if data.startswith("mode_"):
+        mode = data.replace("mode_", "")
+        us = get_user_session(user_id)
+        us.current_mode = mode
+        
+        keyboard = InlineKeyboardMarkup(
+            [[
+                InlineKeyboardButton("6 လုံး", callback_data="len_6"),
+                InlineKeyboardButton("8 လုံး", callback_data="len_8")
+            ]]
+        )
+        await query.edit_message_text(text=f"🔢 **Voucher ၏ စာလုံးအရှည် (Length) ကို ရွေးချယ်ပါ -**", reply_markup=keyboard)
+
+    elif data.startswith("len_"):
+        length = int(data.replace("len_", ""))
+        us = get_user_session(user_id)
+        us.current_length = length
+        
+        await query.edit_message_text(text=f"🚀 **လုပ်ငန်းစဉ်ကို စတင်အသက်သွင်းနေပါပြီ...**")
+        asyncio.create_task(high_speed_bruteforce(context.bot, chat_id, user_id))
+
+# ==================== WEB SERVER FOR RENDER ====================
+async def health_check(request):
+    return web.Response(text="Aladdin Bot Server is 100% Live and Stable!")
+
+async def main():
+    if not BOT_TOKEN:
+        logger.error("CRITICAL: BOT_TOKEN is missing!")
+        sys.exit(1)
+
+    app_tg = Application.builder().token(BOT_TOKEN).build()
+    app_tg.add_handler(CommandHandler("start", start_command))
+    app_tg.add_handler(CallbackQueryHandler(handle_callback))
+    app_tg.add_handler(MessageHandler(filters.PHOTO, handle_photo))
+    app_tg.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    
+    await app_tg.initialize()
+    await app_tg.start()
+    await app_tg.updater.start_polling(drop_pending_updates=True)
+    logger.info("Telegram Bot Started via Polling Mode.")
+
+    app_web = web.Application()
+    app_web.router.add_get('/', health_check)
+    
+    port = int(os.environ.get("PORT", 8080))
+    runner = web.AppRunner(app_web)
+    await runner.setup()
+    site = web.TCPSite(runner, '0.0.0.0', port)
+    await site.start()
+    
+    try:
+        while True:
+            await asyncio.sleep(3600)
+    except (KeyboardInterrupt, SystemExit):
+        pass
+    finally:
+        await app_tg.updater.stop()
+
+if __name__ == "__main__":
+    if sys.platform == 'win32':
+        asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+    asyncio.run(main())
