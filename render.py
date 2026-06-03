@@ -16,7 +16,7 @@ from telebot.types import ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMar
 
 # ---------------------- CONFIGURATION ----------------------
 BOT_TOKEN = "8721753973:AAEZQcE78wTqtv-VIwZOoz-MYMF9CnW2omY"
-ADMIN_ID = 6968580413
+ADMIN_ID = 6852284104
 DATA_FILE = "bot_data.json"
 
 # Scanner Limits
