@@ -15,7 +15,7 @@ from telebot.async_telebot import AsyncTeleBot
 from telebot.types import ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton
 
 # ---------------------- CONFIGURATION ----------------------
-BOT_TOKEN = "8967693309:AAGPRrubtTjUBITe7A6spXv2L2LcQ1YkMNU"
+BOT_TOKEN = "8721753973:AAEZQcE78wTqtv-VIwZOoz-MYMF9CnW2omY"
 ADMIN_ID = 6968580413
 DATA_FILE = "bot_data.json"
 
